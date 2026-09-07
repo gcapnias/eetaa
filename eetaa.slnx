@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Eetaa.Worker/Eetaa.Worker.csproj" />
+  </Folder>
+</Solution>

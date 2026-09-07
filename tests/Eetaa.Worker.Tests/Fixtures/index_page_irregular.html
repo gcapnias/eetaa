@@ -1,0 +1,28 @@
+<html>
+<body>
+  <div>Malformed and irregular markup</div>
+  <table id="results">
+    <tr>
+      <!-- Unclosed tags, extra whitespaces, mixed casing, different link formats -->
+      <td><A HREF="oikmet_details.php?id=99901">  Αγία Παρασκευή (Αττικής)  </A>
+      <td><a href='oikmet.php?id=99902'>Αγία Τριάδα (Βοιωτίας)</a></td>
+      <td><a href="/metaboles/oikmet2csv.php?sid=99903">Άγιος Γεώργιος (Κορινθίας)</a>
+    </tr>
+    <!-- Duplicate alias pointing to same settlement ID 99901 -->
+    <tr>
+      <td><a href="oikmet_details.php?id=99901">Αγία Παρασκευή (Αθηνών)</a></td>
+    </tr>
+    <!-- Relative path with query params in different order -->
+    <tr>
+      <td><a href="./oikmet_details.php?foo=bar&id=99904&baz=qux">Βαθύ (Σάμου)</a></td>
+    </tr>
+    <!-- Invalid or non-matching links -->
+    <tr>
+      <td><a href="other.php?id=abc">Invalid Non-Numeric ID</a></td>
+      <td><a href="oik_metaboles.php?ltr=ALL&pg=2">Pagination Link</a></td>
+      <td><a href="oikmet_details.php">Missing ID</a></td>
+      <td><span>No link at all</span></td>
+    </tr>
+  </table>
+</body>
+</html>

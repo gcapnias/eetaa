@@ -2,6 +2,7 @@ using Eetaa.Worker;
 using Eetaa.Worker.Configuration;
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
+using Eetaa.Worker.Storage;
 
 var cliOptions = WorkerCliOptions.Parse(args);
 
@@ -13,6 +14,12 @@ builder.Services.AddSingleton(cliOptions);
 // Register Data access
 builder.Services.AddSingleton<ISqliteConnectionFactory>(_ => new SqliteConnectionFactory(cliOptions.DatabasePath));
 builder.Services.AddSingleton<ISqliteQueueRepository, SqliteQueueRepository>();
+builder.Services.AddSingleton<ISettlementDetailsRepository, SqliteSettlementDetailsRepository>();
+
+// Register CSV & Storage channel services
+builder.Services.AddSingleton<ISettlementCsvParser, SettlementCsvParser>();
+builder.Services.AddSingleton<ISingleWriterChannel, SingleWriterChannel>();
+builder.Services.AddSingleton<ISingleWriterStorageEngine, SingleWriterStorageEngine>();
 
 // Register Discovery crawler
 builder.Services.AddHttpClient<IIndexDiscoveryCrawler, IndexDiscoveryCrawler>(client =>

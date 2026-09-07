@@ -54,6 +54,26 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_settlement_queue_status ON settlement_queue (status);
+
+                CREATE TABLE IF NOT EXISTS oikmet_details (
+                    settlement_id INTEGER NOT NULL,
+                    change_order INTEGER NOT NULL,
+                    settlement_name TEXT NOT NULL,
+                    nomos TEXT NULL,
+                    change_year INTEGER NULL,
+                    fek_number TEXT NULL,
+                    fek_issue TEXT NULL,
+                    fek_date TEXT NULL,
+                    fek_date_raw TEXT NULL,
+                    change_description TEXT NOT NULL,
+                    raw_record TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    PRIMARY KEY (settlement_id, change_order),
+                    FOREIGN KEY (settlement_id) REFERENCES settlement_queue(settlement_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_oikmet_details_settlement_id ON oikmet_details (settlement_id);
+                CREATE INDEX IF NOT EXISTS idx_oikmet_details_fek_date ON oikmet_details (fek_date);
             ";
             await createCmd.ExecuteNonQueryAsync(cancellationToken);
         }

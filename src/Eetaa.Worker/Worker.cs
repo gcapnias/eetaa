@@ -73,21 +73,28 @@ public sealed class Worker : BackgroundService
             {
                 _logger.LogInformation("Executing Settlement CSV Ingestion phase...");
 
-                // Start storage engine consumer task
-                var storageTask = Task.Run(() => _storageEngine.ProcessChannelAsync(stoppingToken), stoppingToken);
+                // Graceful drain registration: create a drain CancellationTokenSource
+                using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-                // Run concurrent ingestion
-                var ingestionResult = await _ingestionService.IngestAsync(stoppingToken);
+                // Storage engine listens to drain token so it finishes processing queued items
+                var storageTask = Task.Run(() => _storageEngine.ProcessChannelAsync(drainCts.Token));
 
-                // Complete channel writer to signal completion to storage engine
-                _channel.Complete();
-
-                // Wait for all queued writes to drain
-                await storageTask;
-
-                _logger.LogInformation(
-                    "Ingestion phase finished: {Total} processed ({Succeeded} succeeded, {Failed} failed).",
-                    ingestionResult.TotalProcessed, ingestionResult.Succeeded, ingestionResult.Failed);
+                try
+                {
+                    // Run concurrent ingestion bounded by stoppingToken
+                    var ingestionResult = await _ingestionService.IngestAsync(stoppingToken);
+                    _logger.LogInformation(
+                        "Ingestion network phase finished: {Total} processed ({Succeeded} succeeded, {Failed} failed).",
+                        ingestionResult.TotalProcessed, ingestionResult.Succeeded, ingestionResult.Failed);
+                }
+                finally
+                {
+                    // Always complete channel writer so the consumer can drain
+                    _channel.Complete();
+                    _logger.LogInformation("Channel writer marked complete. Draining pending SQLite write transactions...");
+                    await storageTask;
+                    _logger.LogInformation("All pending SQLite write transactions committed successfully.");
+                }
             }
 
             var finalPending = await _repository.GetCountByStatusAsync("pending", stoppingToken);

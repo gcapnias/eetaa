@@ -1,6 +1,8 @@
 using Eetaa.Worker.Configuration;
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
+using Eetaa.Worker.Ingestion;
+using Eetaa.Worker.Storage;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -10,6 +12,9 @@ public sealed class Worker : BackgroundService
 {
     private readonly ISqliteQueueRepository _repository;
     private readonly IIndexDiscoveryCrawler _discoveryCrawler;
+    private readonly ISettlementIngestionService _ingestionService;
+    private readonly ISingleWriterChannel _channel;
+    private readonly ISingleWriterStorageEngine _storageEngine;
     private readonly WorkerCliOptions _cliOptions;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<Worker> _logger;
@@ -17,12 +22,18 @@ public sealed class Worker : BackgroundService
     public Worker(
         ISqliteQueueRepository repository,
         IIndexDiscoveryCrawler discoveryCrawler,
+        ISettlementIngestionService ingestionService,
+        ISingleWriterChannel channel,
+        ISingleWriterStorageEngine storageEngine,
         WorkerCliOptions cliOptions,
         IHostApplicationLifetime lifetime,
         ILogger<Worker> logger)
     {
         _repository = repository;
         _discoveryCrawler = discoveryCrawler;
+        _ingestionService = ingestionService;
+        _channel = channel;
+        _storageEngine = storageEngine;
         _cliOptions = cliOptions;
         _lifetime = lifetime;
         _logger = logger;
@@ -60,12 +71,32 @@ public sealed class Worker : BackgroundService
 
             if (_cliOptions.Mode is "all" or "download")
             {
-                _logger.LogInformation("Download phase will be handled in subsequent phase.");
+                _logger.LogInformation("Executing Settlement CSV Ingestion phase...");
+
+                // Start storage engine consumer task
+                var storageTask = Task.Run(() => _storageEngine.ProcessChannelAsync(stoppingToken), stoppingToken);
+
+                // Run concurrent ingestion
+                var ingestionResult = await _ingestionService.IngestAsync(stoppingToken);
+
+                // Complete channel writer to signal completion to storage engine
+                _channel.Complete();
+
+                // Wait for all queued writes to drain
+                await storageTask;
+
+                _logger.LogInformation(
+                    "Ingestion phase finished: {Total} processed ({Succeeded} succeeded, {Failed} failed).",
+                    ingestionResult.TotalProcessed, ingestionResult.Succeeded, ingestionResult.Failed);
             }
 
             var finalPending = await _repository.GetCountByStatusAsync("pending", stoppingToken);
+            var finalCompleted = await _repository.GetCountByStatusAsync("completed", stoppingToken);
+            var finalFailed = await _repository.GetCountByStatusAsync("failed", stoppingToken);
             var finalTotal = await _repository.GetCountAsync(stoppingToken);
-            _logger.LogInformation("Summary: {Total} total settlements in queue ({Pending} pending).", finalTotal, finalPending);
+            _logger.LogInformation(
+                "Summary: {Total} total settlements in queue ({Pending} pending, {Completed} completed, {Failed} failed).",
+                finalTotal, finalPending, finalCompleted, finalFailed);
         }
         catch (OperationCanceledException)
         {

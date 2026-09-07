@@ -10,6 +10,13 @@ public interface ISqliteQueueRepository
     Task<int> ResetInFlightProcessingAsync(CancellationToken cancellationToken = default);
     Task<long> GetCountAsync(CancellationToken cancellationToken = default);
     Task<long> GetCountByStatusAsync(string status, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Eetaa.Worker.Ingestion.QueueSettlementItem>> GetPendingSettlementsAsync(
+        bool includeFailed,
+        bool forceAll,
+        int? limit = null,
+        CancellationToken cancellationToken = default);
+    Task<bool> MarkProcessingAsync(long settlementId, CancellationToken cancellationToken = default);
+    Task MarkFailedAsync(long settlementId, string errorMessage, CancellationToken cancellationToken = default);
 }
 
 public sealed class SqliteQueueRepository : ISqliteQueueRepository
@@ -170,5 +177,93 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
 
         var result = await cmd.ExecuteScalarAsync(cancellationToken);
         return Convert.ToInt64(result);
+    }
+
+    public async Task<IReadOnlyList<Eetaa.Worker.Ingestion.QueueSettlementItem>> GetPendingSettlementsAsync(
+        bool includeFailed,
+        bool forceAll,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+
+        string whereClause;
+        if (forceAll)
+        {
+            whereClause = "1=1";
+        }
+        else if (includeFailed)
+        {
+            whereClause = "status IN ('pending', 'failed')";
+        }
+        else
+        {
+            whereClause = "status = 'pending'";
+        }
+
+        var limitClause = limit.HasValue ? $"LIMIT {limit.Value}" : string.Empty;
+        cmd.CommandText = $@"
+            SELECT settlement_id, name_hint, status, attempt_count
+            FROM settlement_queue
+            WHERE {whereClause}
+            ORDER BY settlement_id ASC
+            {limitClause};
+        ";
+
+        var list = new List<Eetaa.Worker.Ingestion.QueueSettlementItem>();
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetInt64(0);
+            var nameHint = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var status = reader.GetString(2);
+            var attemptCount = reader.GetInt32(3);
+            list.Add(new Eetaa.Worker.Ingestion.QueueSettlementItem(id, nameHint, status, attemptCount));
+        }
+
+        return list;
+    }
+
+    public async Task<bool> MarkProcessingAsync(long settlementId, CancellationToken cancellationToken = default)
+    {
+        using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE settlement_queue
+            SET status = 'processing',
+                last_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE settlement_id = @settlement_id;
+        ";
+        cmd.Parameters.AddWithValue("@settlement_id", settlementId);
+
+        var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+        return rows > 0;
+    }
+
+    public async Task MarkFailedAsync(long settlementId, string errorMessage, CancellationToken cancellationToken = default)
+    {
+        using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE settlement_queue
+            SET status = 'failed',
+                attempt_count = attempt_count + 1,
+                last_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                error_message = @error_message,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE settlement_id = @settlement_id;
+        ";
+        cmd.Parameters.AddWithValue("@settlement_id", settlementId);
+        cmd.Parameters.AddWithValue("@error_message", errorMessage);
+
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 }

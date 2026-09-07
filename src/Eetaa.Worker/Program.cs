@@ -2,6 +2,7 @@ using Eetaa.Worker;
 using Eetaa.Worker.Configuration;
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
+using Eetaa.Worker.Ingestion;
 using Eetaa.Worker.Storage;
 
 var cliOptions = WorkerCliOptions.Parse(args);
@@ -34,6 +35,21 @@ builder.Services.AddSingleton(new CrawlerOptions
     DelayMs = cliOptions.DelayMs,
     StartPage = cliOptions.StartPage,
     MaxPages = cliOptions.MaxPages
+});
+
+// Register Ingestion & Retry services
+builder.Services.AddHttpClient<ISettlementIngestionService, SettlementIngestionService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("EetaaSettlementWorker/1.0 (+https://github.com/eetaa)");
+});
+builder.Services.AddSingleton<IRetryPolicy, ExponentialBackoffRetryPolicy>();
+builder.Services.AddSingleton(new IngestionOptions
+{
+    Concurrency = cliOptions.Concurrency,
+    DelayMs = cliOptions.DelayMs,
+    RetryFailed = cliOptions.RetryFailed,
+    Force = cliOptions.Force
 });
 
 builder.Services.AddHostedService<Worker>();

@@ -1,4 +1,5 @@
 using Eetaa.Worker.Data;
+
 using Microsoft.Data.Sqlite;
 
 namespace Eetaa.Worker.Storage;
@@ -23,13 +24,6 @@ public sealed class SqliteSettlementDetailsRepository : ISettlementDetailsReposi
     {
         using var connection = _connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
-
-        // Turn on foreign keys for this connection
-        using (var pragmaCmd = connection.CreateCommand())
-        {
-            pragmaCmd.CommandText = "PRAGMA foreign_keys = ON;";
-            await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
-        }
 
         using var transaction = connection.BeginTransaction();
 

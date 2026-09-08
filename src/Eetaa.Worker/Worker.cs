@@ -3,6 +3,7 @@ using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
 using Eetaa.Worker.Ingestion;
 using Eetaa.Worker.Storage;
+
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 

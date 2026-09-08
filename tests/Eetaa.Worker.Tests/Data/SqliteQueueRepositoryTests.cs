@@ -1,5 +1,6 @@
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
+
 using Microsoft.Data.Sqlite;
 
 namespace Eetaa.Worker.Tests.Data;

@@ -26,7 +26,8 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Cache = SqliteCacheMode.Shared,
+            ForeignKeys = true
         };
 
         _connectionString = builder.ToString();

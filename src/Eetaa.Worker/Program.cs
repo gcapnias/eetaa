@@ -4,6 +4,7 @@ using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
 using Eetaa.Worker.Ingestion;
 using Eetaa.Worker.Storage;
+
 using Serilog;
 using Serilog.Events;
 

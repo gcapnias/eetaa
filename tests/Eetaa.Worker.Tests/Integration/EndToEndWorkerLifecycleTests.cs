@@ -1,12 +1,15 @@
 using System.Net;
 using System.Text;
+
 using Eetaa.Worker.Configuration;
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
 using Eetaa.Worker.Ingestion;
 using Eetaa.Worker.Storage;
+
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+
 using Xunit;
 
 namespace Eetaa.Worker.Tests.Integration;

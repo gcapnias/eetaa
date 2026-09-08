@@ -1,4 +1,5 @@
 using System.Net;
+
 using Microsoft.Extensions.Logging;
 
 namespace Eetaa.Worker.Ingestion;

@@ -1,6 +1,8 @@
 using System.Net;
+
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
+
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 

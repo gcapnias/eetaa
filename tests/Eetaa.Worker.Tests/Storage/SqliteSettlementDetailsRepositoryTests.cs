@@ -1,6 +1,7 @@
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
 using Eetaa.Worker.Storage;
+
 using Microsoft.Data.Sqlite;
 
 namespace Eetaa.Worker.Tests.Storage;
@@ -193,19 +194,15 @@ public class SqliteSettlementDetailsRepositoryTests : IDisposable
 
         var changes = new List<SettlementDetailRecord>
         {
-            new(12345, 1, "Test Village", "Messinia", 1900, null, null, null, null, "Creation")
+            new(12345, 1, "Test Settlement", "Messinia", 1900, null, null, null, null, "Creation")
         };
         await _detailsRepository.SaveSettlementChangesAsync(new SettlementPayload(12345, changes));
         Assert.Single(await _detailsRepository.GetChangesBySettlementIdAsync(12345));
 
-        // Delete from queue directly with foreign keys enabled
+        // Delete from queue directly with foreign keys enabled via connection factory
         using (var conn = _connectionFactory.CreateConnection())
         {
             await conn.OpenAsync();
-            using var pragma = conn.CreateCommand();
-            pragma.CommandText = "PRAGMA foreign_keys = ON;";
-            await pragma.ExecuteNonQueryAsync();
-
             using var delCmd = conn.CreateCommand();
             delCmd.CommandText = "DELETE FROM settlement_queue WHERE settlement_id = 12345;";
             await delCmd.ExecuteNonQueryAsync();

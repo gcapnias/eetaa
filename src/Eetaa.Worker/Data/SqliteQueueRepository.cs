@@ -1,4 +1,5 @@
 using Eetaa.Worker.Discovery;
+
 using Microsoft.Data.Sqlite;
 
 namespace Eetaa.Worker.Data;
@@ -33,12 +34,11 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
         using var connection = _connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        // Apply performance and integrity pragmas
+        // Apply performance pragmas
         using (var pragmaCmd = connection.CreateCommand())
         {
             pragmaCmd.CommandText = @"
                 PRAGMA journal_mode = WAL;
-                PRAGMA foreign_keys = ON;
                 PRAGMA synchronous = NORMAL;
             ";
             await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
@@ -51,7 +51,7 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
                 CREATE TABLE IF NOT EXISTS settlement_queue (
                     settlement_id INTEGER PRIMARY KEY,
                     name_hint TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     last_attempt_at TEXT NULL,
                     completed_at TEXT NULL,

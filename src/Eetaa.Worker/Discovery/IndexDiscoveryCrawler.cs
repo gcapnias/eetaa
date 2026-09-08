@@ -1,4 +1,5 @@
 using Eetaa.Worker.Data;
+
 using Microsoft.Extensions.Logging;
 
 namespace Eetaa.Worker.Discovery;

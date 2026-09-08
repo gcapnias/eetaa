@@ -7,6 +7,7 @@ A high-performance, resilient .NET 10 console worker application for crawling, d
 ## Overview
 
 The EETAA publishes historical statutory records documenting every administrative change of Greek settlements from the 19th century to modern times. This application automates:
+
 1. Crawling the paginated settlement index to discover settlement IDs and names.
 2. Ingesting per-settlement CSV exports containing statutory administrative change history.
 3. Normalizing and storing all records in a local SQLite database with transactional integrity and crash resumability.
@@ -29,7 +30,7 @@ This project adheres to the official domain terminology defined in [CONTEXT.md](
 
 The worker implements a staged, decoupled architecture designed for high network concurrency and SQLite write safety:
 
-```
+```text
 [ EETAA Web Endpoint ]
          │
          ▼  (HTTP GET with polite rate limiting & bounded concurrency)
@@ -107,7 +108,7 @@ The test suite covers CLI option parsing, HTML index parsing, CSV parsing, date 
 The worker CLI options are parsed by `WorkerCliOptions`. Arguments can be supplied in either `--option <value>` or `--option=<value>` syntax.
 
 | Option | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `--mode` | string | `all` | Execution mode: `all` (discover and download), `discover` (index crawl only), or `download` (CSV ingestion only). |
 | `--db` | string | `data/eetaa.db` | Relative or absolute file path to the target SQLite database. |
 | `--base-url` | string | `https://eetaa.gr/eetaa/metaboles/oik_metaboles.php` | Base URL of the EETAA settlement index endpoint. |
@@ -125,6 +126,7 @@ The worker CLI options are parsed by `WorkerCliOptions`. Arguments can be suppli
 All examples assume execution from the repository root via `dotnet run --project src/Eetaa.Worker/`.
 
 ### 1. Full Pipeline (Default)
+
 Run both discovery and ingestion using default settings (`data/eetaa.db`, concurrency 3, delay 150ms):
 
 ```bash
@@ -134,6 +136,7 @@ dotnet run --project src/Eetaa.Worker/ -- --mode all
 ```
 
 ### 2. Discovery Only
+
 Crawl the settlement index starting from page 1 up to page 10 and record discovered settlements in the queue:
 
 ```bash
@@ -141,6 +144,7 @@ dotnet run --project src/Eetaa.Worker/ -- --mode discover --start-page 1 --max-p
 ```
 
 ### 3. Ingestion (Download) Only
+
 Process existing pending settlements from the queue without re-crawling index pages:
 
 ```bash
@@ -148,6 +152,7 @@ dotnet run --project src/Eetaa.Worker/ -- --mode download
 ```
 
 ### 4. Custom Database File Path
+
 Specify a custom database destination (the directory and database schema are created automatically):
 
 ```bash
@@ -155,6 +160,7 @@ dotnet run --project src/Eetaa.Worker/ -- --db "data/custom_eetaa.db"
 ```
 
 ### 5. Conservative / Polite Rate Throttling
+
 Throttle requests gently when running against sensitive networks or rate limits (single connection, 500ms inter-request delay):
 
 ```bash
@@ -162,6 +168,7 @@ dotnet run --project src/Eetaa.Worker/ -- --concurrency 1 --delay-ms 500
 ```
 
 ### 6. Retry Failed Ingestions
+
 Re-queue previously failed settlements (e.g. after network drops or server timeouts) and resume ingestion:
 
 ```bash
@@ -169,6 +176,7 @@ dotnet run --project src/Eetaa.Worker/ -- --mode download --retry-failed
 ```
 
 ### 7. Force Full Re-Ingestion
+
 Force re-download and re-parsing of all settlements, including already completed entries:
 
 ```bash

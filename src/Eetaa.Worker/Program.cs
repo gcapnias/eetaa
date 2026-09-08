@@ -36,6 +36,7 @@ try
     // Register CSV & Storage channel services
     builder.Services.AddSingleton<ISettlementCsvParser, SettlementCsvParser>();
     builder.Services.AddSingleton<ISingleWriterChannel, SingleWriterChannel>();
+    builder.Services.AddSingleton<IIngestionProgressCoordinator, IngestionProgressCoordinator>();
     builder.Services.AddSingleton<ISingleWriterStorageEngine, SingleWriterStorageEngine>();
 
     // Register Discovery crawler

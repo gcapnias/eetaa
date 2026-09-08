@@ -21,6 +21,7 @@ public sealed class SettlementIngestionService : ISettlementIngestionService
     private readonly IRetryPolicy _retryPolicy;
     private readonly IngestionOptions _options;
     private readonly ILogger<SettlementIngestionService> _logger;
+    private readonly IIngestionProgressCoordinator? _progressCoordinator;
 
     public SettlementIngestionService(
         HttpClient httpClient,
@@ -29,7 +30,8 @@ public sealed class SettlementIngestionService : ISettlementIngestionService
         ISingleWriterChannel channel,
         IRetryPolicy retryPolicy,
         IngestionOptions options,
-        ILogger<SettlementIngestionService> logger)
+        ILogger<SettlementIngestionService> logger,
+        IIngestionProgressCoordinator? progressCoordinator = null)
     {
         _httpClient = httpClient;
         _queueRepository = queueRepository;
@@ -38,6 +40,7 @@ public sealed class SettlementIngestionService : ISettlementIngestionService
         _retryPolicy = retryPolicy;
         _options = options;
         _logger = logger;
+        _progressCoordinator = progressCoordinator;
     }
 
     public async Task<IngestionResult> IngestAsync(CancellationToken cancellationToken = default)
@@ -57,6 +60,9 @@ public sealed class SettlementIngestionService : ISettlementIngestionService
             cancellationToken: cancellationToken);
 
         _logger.LogInformation("Found {Count} eligible settlement(s) for CSV download.", pendingItems.Count);
+
+        _progressCoordinator?.Start(pendingItems.Count, () => _channel.Count);
+
         if (pendingItems.Count == 0)
         {
             return new IngestionResult(0, 0, 0);
@@ -131,6 +137,7 @@ public sealed class SettlementIngestionService : ISettlementIngestionService
             }, item.SettlementId, cancellationToken);
 
             await _channel.EnqueueAsync(payload, cancellationToken);
+            _progressCoordinator?.RecordDownloaded();
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -198,4 +198,50 @@ public class SettlementIngestionServiceTests : IDisposable
         var failedCount = await _queueRepo.GetCountByStatusAsync("failed");
         Assert.Equal(1, failedCount);
     }
+
+    [Fact]
+    public async Task IngestAsync_InitializesAndRecordsProgressOnCoordinator()
+    {
+        await _queueRepo.InitializeDatabaseAsync();
+        await _queueRepo.UpsertDiscoveredSettlementsAsync(new[]
+        {
+            new DiscoveredSettlement(501, "Test 501"),
+            new DiscoveredSettlement(502, "Test 502")
+        });
+
+        var mockHandler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri?.ToString() ?? "";
+            if (uri.Contains("sid=501"))
+            {
+                var content = "\"ΟΝΟΜΑΣΙΑ ΟΙΚΙΣΜΟΥ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\n\"Test 501\";Αττικής;1980;;;01/01/1980;\"Ίδρυση\"\r\n";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(content, Encoding.UTF8, "text/csv")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var httpClient = new HttpClient(mockHandler);
+        var channel = new SingleWriterChannel(10);
+        var progressLogger = new TestLogger<IngestionProgressCoordinator>();
+        using var coordinator = new IngestionProgressCoordinator(progressLogger);
+
+        var service = new SettlementIngestionService(
+            httpClient,
+            _queueRepo,
+            _csvParser,
+            channel,
+            new ExponentialBackoffRetryPolicy(1, 1),
+            new IngestionOptions { Concurrency = 1, DelayMs = 0 },
+            NullLogger<SettlementIngestionService>.Instance,
+            coordinator
+        );
+
+        var result = await service.IngestAsync();
+
+        Assert.Equal(2, coordinator.Total);
+        Assert.Equal(1, coordinator.Downloaded);
+    }
 }

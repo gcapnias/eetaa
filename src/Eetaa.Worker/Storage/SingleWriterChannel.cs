@@ -6,6 +6,7 @@ public interface ISingleWriterChannel
 {
     ChannelWriter<SettlementPayload> Writer { get; }
     ChannelReader<SettlementPayload> Reader { get; }
+    int Count { get; }
     ValueTask EnqueueAsync(SettlementPayload payload, CancellationToken cancellationToken = default);
     void Complete(Exception? error = null);
 }
@@ -27,6 +28,7 @@ public sealed class SingleWriterChannel : ISingleWriterChannel
 
     public ChannelWriter<SettlementPayload> Writer => _channel.Writer;
     public ChannelReader<SettlementPayload> Reader => _channel.Reader;
+    public int Count => _channel.Reader.Count;
 
     public ValueTask EnqueueAsync(SettlementPayload payload, CancellationToken cancellationToken = default)
     {

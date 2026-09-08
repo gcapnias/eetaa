@@ -16,6 +16,7 @@ public sealed class Worker : BackgroundService
     private readonly ISettlementIngestionService _ingestionService;
     private readonly ISingleWriterChannel _channel;
     private readonly ISingleWriterStorageEngine _storageEngine;
+    private readonly IIngestionProgressCoordinator? _progressCoordinator;
     private readonly WorkerCliOptions _cliOptions;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<Worker> _logger;
@@ -28,7 +29,8 @@ public sealed class Worker : BackgroundService
         ISingleWriterStorageEngine storageEngine,
         WorkerCliOptions cliOptions,
         IHostApplicationLifetime lifetime,
-        ILogger<Worker> logger)
+        ILogger<Worker> logger,
+        IIngestionProgressCoordinator? progressCoordinator = null)
     {
         _repository = repository;
         _discoveryCrawler = discoveryCrawler;
@@ -38,6 +40,7 @@ public sealed class Worker : BackgroundService
         _cliOptions = cliOptions;
         _lifetime = lifetime;
         _logger = logger;
+        _progressCoordinator = progressCoordinator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -94,6 +97,7 @@ public sealed class Worker : BackgroundService
                     _channel.Complete();
                     _logger.LogInformation("Channel writer marked complete. Draining pending SQLite write transactions...");
                     await storageTask;
+                    _progressCoordinator?.Complete();
                     _logger.LogInformation("All pending SQLite write transactions committed successfully.");
                 }
             }

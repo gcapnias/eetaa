@@ -1,5 +1,6 @@
 using Eetaa.Worker.Data;
 using Eetaa.Worker.Discovery;
+using Eetaa.Worker.Ingestion;
 using Eetaa.Worker.Storage;
 
 using Microsoft.Data.Sqlite;
@@ -119,5 +120,41 @@ public class SingleWriterStorageEngineTests : IDisposable
         Assert.Equal(2, await _queueRepository.GetCountByStatusAsync("completed"));
         Assert.Equal(1, await _queueRepository.GetCountByStatusAsync("failed"));
         Assert.Equal(1, await _detailsRepository.GetTotalChangesCountAsync());
+    }
+
+    [Fact]
+    public async Task ProcessChannelAsync_NotifiesProgressCoordinator_OnPersistenceAndErrors()
+    {
+        await _queueRepository.InitializeDatabaseAsync();
+        var seedList = new List<DiscoveredSettlement>
+        {
+            new(201, "Settlement 201"),
+            new(202, "Settlement 202")
+        };
+        await _queueRepository.UpsertDiscoveredSettlementsAsync(seedList);
+
+        var progressLogger = new Eetaa.Worker.Tests.Ingestion.TestLogger<IngestionProgressCoordinator>();
+        using var coordinator = new IngestionProgressCoordinator(progressLogger);
+        coordinator.Start(2, () => _channel.Count);
+
+        var engine = new SingleWriterStorageEngine(
+            _channel,
+            _detailsRepository,
+            NullLogger<SingleWriterStorageEngine>.Instance,
+            coordinator);
+
+        var consumerTask = Task.Run(() => engine.ProcessChannelAsync());
+
+        await _channel.EnqueueAsync(new SettlementPayload(201, new[]
+        {
+            new SettlementDetailRecord(201, 1, "Name 201", null, null, null, null, null, null, "Desc")
+        }));
+        await _channel.EnqueueAsync(new SettlementPayload(202, Array.Empty<SettlementDetailRecord>(), "Failed download"));
+
+        _channel.Complete();
+        await consumerTask;
+
+        Assert.Equal(1, coordinator.Persisted);
+        Assert.Equal(1, coordinator.Failed);
     }
 }

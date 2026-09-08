@@ -234,4 +234,94 @@ public class EndToEndWorkerLifecycleTests : IDisposable
         Assert.Equal(0, completedCount);
         Assert.Equal(0, detailsCount);
     }
+
+    [Fact]
+    public async Task Worker_ExecutesDownloadMode_EmitsProgressFeedback()
+    {
+        await _queueRepo.InitializeDatabaseAsync();
+        await _queueRepo.UpsertDiscoveredSettlementsAsync(new[]
+        {
+            new DiscoveredSettlement(201, "Settlement 201"),
+            new DiscoveredSettlement(202, "Settlement 202")
+        });
+
+        var csv201 = "\"ΟΝΟΜΑΣΙΑ ΟΙΚΙΣΜΟΥ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\n\"Settlement 201\";Αττικής;1840;;;01/01/1840;\"Πρωτεύουσα\"\r\n";
+        var csv202 = "\"ΟΝΟΜΑΣΙΑ ΟΙΚΙΣΜΟΥ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\n\"Settlement 202\";Αττικής;1845;;;01/01/1845;\"Πρωτεύουσα\"\r\n";
+
+        var mockHandler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri?.ToString() ?? string.Empty;
+            if (uri.Contains("sid=201"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(csv201, Encoding.UTF8, "text/csv")
+                };
+            }
+            if (uri.Contains("sid=202"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(csv202, Encoding.UTF8, "text/csv")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var httpClient = new HttpClient(mockHandler);
+        var crawler = new IndexDiscoveryCrawler(
+            httpClient,
+            new IndexParser(),
+            _queueRepo,
+            new CrawlerOptions(),
+            NullLogger<IndexDiscoveryCrawler>.Instance
+        );
+
+        var channel = new SingleWriterChannel(100);
+        var progressLogger = new Eetaa.Worker.Tests.Ingestion.TestLogger<IngestionProgressCoordinator>();
+        using var coordinator = new IngestionProgressCoordinator(progressLogger);
+        var storageEngine = new SingleWriterStorageEngine(channel, _detailsRepo, NullLogger<SingleWriterStorageEngine>.Instance, coordinator);
+        var ingestionService = new SettlementIngestionService(
+            httpClient,
+            _queueRepo,
+            _csvParser,
+            channel,
+            new ExponentialBackoffRetryPolicy(1, 1),
+            new IngestionOptions { Concurrency = 2, DelayMs = 0 },
+            NullLogger<SettlementIngestionService>.Instance,
+            coordinator
+        );
+
+        var cliOptions = new WorkerCliOptions
+        {
+            Mode = "download",
+            DatabasePath = _dbPath
+        };
+
+        var worker = new Worker(
+            _queueRepo,
+            crawler,
+            ingestionService,
+            channel,
+            storageEngine,
+            cliOptions,
+            new TestHostApplicationLifetime(),
+            NullLogger<Worker>.Instance,
+            coordinator
+        );
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await worker.StartAsync(cts.Token);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(2, await _queueRepo.GetCountByStatusAsync("completed"));
+        Assert.Equal(2, await _detailsRepo.GetTotalChangesCountAsync());
+
+        // Verify progress coordinator logs
+        Assert.NotEmpty(progressLogger.Entries);
+        var finalLog = progressLogger.Entries.Last();
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Information, finalLog.Level);
+        Assert.Contains("Progress: 2/2 settlements (100.0%)", finalLog.Message);
+        Assert.Contains("Failed: 0", finalLog.Message);
+    }
 }

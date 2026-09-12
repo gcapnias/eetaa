@@ -65,11 +65,21 @@ public sealed class WorkerCliOptions
             }
             else if (arg.StartsWith("--base-url=", StringComparison.OrdinalIgnoreCase))
             {
-                options.BaseUrl = arg["--base-url=".Length..].Trim();
+                var url = arg["--base-url=".Length..].Trim();
+                options.BaseUrl = url;
+                if (options.SettlementsBaseUrl == "https://eetaa.gr/eetaa/metaboles/oik_metaboles.php")
+                {
+                    options.SettlementsBaseUrl = url;
+                }
             }
             else if (string.Equals(arg, "--base-url", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
-                options.BaseUrl = args[++i].Trim();
+                var url = args[++i].Trim();
+                options.BaseUrl = url;
+                if (options.SettlementsBaseUrl == "https://eetaa.gr/eetaa/metaboles/oik_metaboles.php")
+                {
+                    options.SettlementsBaseUrl = url;
+                }
             }
             else if (arg.StartsWith("--concurrency=", StringComparison.OrdinalIgnoreCase))
             {
@@ -111,6 +121,11 @@ public sealed class WorkerCliOptions
             {
                 options.Force = true;
             }
+        }
+
+        if (options.Entity is not ("all" or "settlements" or "authorities"))
+        {
+            throw new ArgumentException($"Invalid entity '{options.Entity}'. Allowed values: all, settlements, authorities.");
         }
 
         return options;

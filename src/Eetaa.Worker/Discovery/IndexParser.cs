@@ -131,29 +131,23 @@ public sealed partial class IndexParser
     /// <summary>
     /// Deduplicates settlements by SettlementId, preserving the first occurrence.
     /// </summary>
-    public IEnumerable<DiscoveredSettlement> Deduplicate(IEnumerable<DiscoveredSettlement> settlements)
-    {
-        var seenIds = new HashSet<int>();
-        foreach (var settlement in settlements)
-        {
-            if (seenIds.Add(settlement.SettlementId))
-            {
-                yield return settlement;
-            }
-        }
-    }
+    public IEnumerable<DiscoveredSettlement> Deduplicate(IEnumerable<DiscoveredSettlement> settlements) =>
+        DeduplicateBy(settlements, s => s.SettlementId);
 
     /// <summary>
     /// Deduplicates local authorities by AuthorityId, preserving the first occurrence.
     /// </summary>
-    public IEnumerable<DiscoveredLocalAuthority> Deduplicate(IEnumerable<DiscoveredLocalAuthority> authorities)
+    public IEnumerable<DiscoveredLocalAuthority> Deduplicate(IEnumerable<DiscoveredLocalAuthority> authorities) =>
+        DeduplicateBy(authorities, a => a.AuthorityId);
+
+    private static IEnumerable<T> DeduplicateBy<T>(IEnumerable<T> items, Func<T, int> keySelector)
     {
         var seenIds = new HashSet<int>();
-        foreach (var authority in authorities)
+        foreach (var item in items)
         {
-            if (seenIds.Add(authority.AuthorityId))
+            if (seenIds.Add(keySelector(item)))
             {
-                yield return authority;
+                yield return item;
             }
         }
     }

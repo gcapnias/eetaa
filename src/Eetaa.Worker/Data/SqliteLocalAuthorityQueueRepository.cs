@@ -21,18 +21,11 @@ public interface ISqliteLocalAuthorityQueueRepository
     Task MarkFailedAsync(long authorityId, string errorMessage, CancellationToken cancellationToken = default);
 }
 
-public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQueueRepository
+public sealed class SqliteLocalAuthorityQueueRepository(ISqliteConnectionFactory connectionFactory) : ISqliteLocalAuthorityQueueRepository
 {
-    private readonly ISqliteConnectionFactory _connectionFactory;
-
-    public SqliteLocalAuthorityQueueRepository(ISqliteConnectionFactory connectionFactory)
-    {
-        _connectionFactory = connectionFactory;
-    }
-
     public async Task InitializeDatabaseAsync(CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         // Apply performance pragmas
@@ -76,7 +69,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
             return 0;
         }
 
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var transaction = connection.BeginTransaction();
@@ -122,7 +115,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
 
     public async Task<int> ResetInFlightProcessingAsync(CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();
@@ -138,7 +131,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
 
     public async Task<long> GetCountAsync(CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();
@@ -149,7 +142,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
 
     public async Task<long> GetCountByStatusAsync(string status, CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();
@@ -166,7 +159,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
         int? limit = null,
         CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();
@@ -210,7 +203,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
 
     public async Task<bool> MarkProcessingAsync(long authorityId, CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();
@@ -229,7 +222,7 @@ public sealed class SqliteLocalAuthorityQueueRepository : ISqliteLocalAuthorityQ
 
     public async Task MarkFailedAsync(long authorityId, string errorMessage, CancellationToken cancellationToken = default)
     {
-        using var connection = _connectionFactory.CreateConnection();
+        using var connection = connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         using var cmd = connection.CreateCommand();

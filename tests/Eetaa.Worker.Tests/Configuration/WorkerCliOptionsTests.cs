@@ -92,6 +92,13 @@ public class WorkerCliOptionsTests
     }
 
     [Fact]
+    public void Parse_InvalidEntity_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => WorkerCliOptions.Parse(["--entity=invalid"]));
+        Assert.Throws<ArgumentException>(() => WorkerCliOptions.Parse(["--entity", "other"]));
+    }
+
+    [Fact]
     public void Parse_DistinctBaseUrls_ParsesCorrectly()
     {
         var args = new[]

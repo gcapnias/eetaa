@@ -53,7 +53,7 @@ try
     builder.Services.AddSingleton<IndexParser>();
     builder.Services.AddSingleton(new CrawlerOptions
     {
-        BaseUrl = cliOptions.BaseUrl,
+        BaseUrl = cliOptions.SettlementsBaseUrl ?? cliOptions.BaseUrl,
         Concurrency = cliOptions.Concurrency,
         DelayMs = cliOptions.DelayMs,
         StartPage = cliOptions.StartPage,

@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Eetaa.Worker.Ingestion;
 
-public sealed class IngestionProgressCoordinator : IIngestionProgressCoordinator
+public class IngestionProgressCoordinator : IIngestionProgressCoordinator
 {
     private readonly ILogger<IngestionProgressCoordinator> _logger;
     private readonly TimeSpan _reportInterval;
@@ -20,6 +20,7 @@ public sealed class IngestionProgressCoordinator : IIngestionProgressCoordinator
     private int _persisted;
     private int _failed;
     private int _lastReportedCompletedCount;
+    private string _entityLabel;
     private bool _isStarted;
     private bool _isCompleted;
 
@@ -27,24 +28,41 @@ public sealed class IngestionProgressCoordinator : IIngestionProgressCoordinator
     public int Downloaded => Volatile.Read(ref _downloaded);
     public int Persisted => Volatile.Read(ref _persisted);
     public int Failed => Volatile.Read(ref _failed);
+    public string EntityLabel
+    {
+        get
+        {
+            lock (_syncLock)
+            {
+                return _entityLabel;
+            }
+        }
+    }
 
     public IngestionProgressCoordinator(
         ILogger<IngestionProgressCoordinator> logger,
         TimeSpan? reportInterval = null,
-        int reportItemCadence = 100)
+        int reportItemCadence = 100,
+        string entityLabel = "settlement")
     {
         _logger = logger;
         _reportInterval = reportInterval ?? TimeSpan.FromSeconds(15);
         _reportItemCadence = reportItemCadence > 0 ? reportItemCadence : 100;
+        _entityLabel = string.IsNullOrWhiteSpace(entityLabel) ? "settlement" : entityLabel;
     }
 
-    public void Start(int totalCount, Func<int> getBufferCount)
+    public void Start(int totalCount, Func<int> getBufferCount, string? entityLabel = null)
     {
         lock (_syncLock)
         {
             if (_isStarted)
             {
                 return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entityLabel))
+            {
+                _entityLabel = entityLabel;
             }
 
             _isStarted = true;
@@ -171,16 +189,37 @@ public sealed class IngestionProgressCoordinator : IIngestionProgressCoordinator
             : TimeSpan.Zero;
 
         var bufferCount = _getBufferCount?.Invoke() ?? 0;
+        var entityPlural = GetPluralLabel();
 
         _logger.LogInformation(
-            "Progress: {Persisted}/{Total} settlements ({Percent:F1}%) | {Rate:F1} item/s | ETA: {Eta:hh\\:mm\\:ss} | Failed: {Failed} | Buffer: {BufferCount}",
+            "Progress: {Persisted}/{Total} {Entity} ({Percent:F1}%) | {Rate:F1} item/s | ETA: {Eta:hh\\:mm\\:ss} | Failed: {Failed} | Buffer: {BufferCount}",
             persisted,
             total,
+            entityPlural,
             percent,
             rate,
             eta,
             failed,
             bufferCount);
+    }
+
+    private string GetPluralLabel()
+    {
+        var label = _entityLabel;
+        if (string.Equals(label, "local authority", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(label, "local authorities", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(label, "authorities", StringComparison.OrdinalIgnoreCase))
+        {
+            return "local authorities";
+        }
+
+        if (string.Equals(label, "settlement", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(label, "settlements", StringComparison.OrdinalIgnoreCase))
+        {
+            return "settlements";
+        }
+
+        return label;
     }
 
     public void Dispose()

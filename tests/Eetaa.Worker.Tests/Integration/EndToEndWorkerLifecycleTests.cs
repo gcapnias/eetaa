@@ -7,6 +7,7 @@ using Eetaa.Worker.Discovery;
 using Eetaa.Worker.Ingestion;
 using Eetaa.Worker.Storage;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -21,7 +22,9 @@ public class EndToEndWorkerLifecycleTests : IDisposable
     private readonly SqliteQueueRepository _queueRepo;
     private readonly SqliteLocalAuthorityQueueRepository _authorityQueueRepo;
     private readonly SqliteSettlementDetailsRepository _detailsRepo;
+    private readonly SqliteLocalAuthorityDetailsRepository _authorityDetailsRepo;
     private readonly SettlementCsvParser _csvParser;
+    private readonly LocalAuthorityCsvParser _authorityCsvParser;
 
     public EndToEndWorkerLifecycleTests()
     {
@@ -30,7 +33,9 @@ public class EndToEndWorkerLifecycleTests : IDisposable
         _queueRepo = new SqliteQueueRepository(_connectionFactory);
         _authorityQueueRepo = new SqliteLocalAuthorityQueueRepository(_connectionFactory);
         _detailsRepo = new SqliteSettlementDetailsRepository(_connectionFactory);
+        _authorityDetailsRepo = new SqliteLocalAuthorityDetailsRepository(_connectionFactory);
         _csvParser = new SettlementCsvParser();
+        _authorityCsvParser = new LocalAuthorityCsvParser();
     }
 
     public void Dispose()
@@ -404,5 +409,357 @@ public class EndToEndWorkerLifecycleTests : IDisposable
 
         Assert.Equal(2, authorityPending);
         Assert.Equal(0, settlementPending);
+    }
+
+    [Fact]
+    public async Task Worker_ExecutesLocalAuthorityDownloadModeOnly()
+    {
+        await _authorityQueueRepo.InitializeDatabaseAsync();
+        await _authorityQueueRepo.UpsertDiscoveredAuthoritiesAsync(new[]
+        {
+            new DiscoveredLocalAuthority(601, "Δ. Αθηναίων"),
+            new DiscoveredLocalAuthority(602, "Κ. Κηφισιάς")
+        });
+
+        var csv601 = "\"ΕΙΔΟΣ ΟΤΑ\";\"ΟΝΟΜΑΣΙΑ ΟΤΑ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\nΔ;\"Δ. Αθηναίων\";Αττικής;1835;;;01/01/1835;\"Σύσταση δήμου\"\r\n";
+        var csv602 = "\"ΕΙΔΟΣ ΟΤΑ\";\"ΟΝΟΜΑΣΙΑ ΟΤΑ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\nΚ;\"Κ. Κηφισιάς\";Αττικής;1925;;;05/05/1925;\"Σύσταση κοινότητας\"\r\n";
+
+        var mockHandler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri?.ToString() ?? string.Empty;
+            if (uri.Contains("sid=601"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(csv601, Encoding.UTF8, "text/csv")
+                };
+            }
+            if (uri.Contains("sid=602"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(csv602, Encoding.UTF8, "text/csv")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var httpClient = new HttpClient(mockHandler);
+        var settlementCrawler = new IndexDiscoveryCrawler(
+            httpClient,
+            new IndexParser(),
+            _queueRepo,
+            new CrawlerOptions(),
+            NullLogger<IndexDiscoveryCrawler>.Instance
+        );
+
+        var authorityChannel = new LocalAuthorityChannel(100);
+        var progressLogger = new Eetaa.Worker.Tests.Ingestion.TestLogger<IngestionProgressCoordinator>();
+        using var coordinator = new IngestionProgressCoordinator(progressLogger, entityLabel: "local authority");
+        var authorityStorageEngine = new LocalAuthorityStorageEngine(authorityChannel, _authorityDetailsRepo, NullLogger<LocalAuthorityStorageEngine>.Instance, coordinator);
+        var authorityIngestionService = new LocalAuthorityIngestionService(
+            httpClient,
+            _authorityQueueRepo,
+            _authorityCsvParser,
+            authorityChannel,
+            new ExponentialBackoffRetryPolicy(1, 1),
+            new LocalAuthorityIngestionOptions { Concurrency = 2, DelayMs = 0 },
+            NullLogger<LocalAuthorityIngestionService>.Instance,
+            coordinator
+        );
+
+        var cliOptions = new WorkerCliOptions
+        {
+            Entity = "authorities",
+            Mode = "download",
+            DatabasePath = _dbPath
+        };
+
+        var worker = new Worker(
+            _queueRepo,
+            settlementCrawler,
+            null,
+            null,
+            null,
+            cliOptions,
+            new TestHostApplicationLifetime(),
+            NullLogger<Worker>.Instance,
+            authorityRepository: _authorityQueueRepo,
+            authorityIngestionService: authorityIngestionService,
+            authorityChannel: authorityChannel,
+            authorityStorageEngine: authorityStorageEngine,
+            authorityProgressCoordinator: coordinator
+        );
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await worker.StartAsync(cts.Token);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(2, await _authorityQueueRepo.GetCountByStatusAsync("completed"));
+        Assert.Equal(2, await _authorityDetailsRepo.GetTotalChangesCountAsync());
+
+        var changes601 = await _authorityDetailsRepo.GetChangesByAuthorityIdAsync(601);
+        Assert.Single(changes601);
+        Assert.Equal("Δ. Αθηναίων", changes601[0].AuthorityName);
+        Assert.Equal("1835-01-01", changes601[0].FekDate);
+        Assert.Equal(AuthorityType.Municipality, changes601[0].AuthorityType);
+
+        var changes602 = await _authorityDetailsRepo.GetChangesByAuthorityIdAsync(602);
+        Assert.Single(changes602);
+        Assert.Equal("Κ. Κηφισιάς", changes602[0].AuthorityName);
+        Assert.Equal(AuthorityType.Community, changes602[0].AuthorityType);
+
+        // Verify entity-labeled progress coordinator output
+        Assert.NotEmpty(progressLogger.Entries);
+        var finalLog = progressLogger.Entries.Last();
+        Assert.Contains("local authorities", finalLog.Message);
+    }
+
+    [Fact]
+    public async Task Worker_ExecutesAllEntitiesSequentially_WithoutChannelClosedException()
+    {
+        await _queueRepo.InitializeDatabaseAsync();
+        await _authorityQueueRepo.InitializeDatabaseAsync();
+
+        await _queueRepo.UpsertDiscoveredSettlementsAsync(new[]
+        {
+            new DiscoveredSettlement(701, "Settlement 701")
+        });
+        await _authorityQueueRepo.UpsertDiscoveredAuthoritiesAsync(new[]
+        {
+            new DiscoveredLocalAuthority(801, "Authority 801")
+        });
+
+        var settlementCsv = "\"ΟΝΟΜΑΣΙΑ ΟΙΚΙΣΜΟΥ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\n\"Settlement 701\";Αττικής;1850;;;01/01/1850;\"Πρωτεύουσα\"\r\n";
+        var authorityCsv = "\"ΕΙΔΟΣ ΟΤΑ\";\"ΟΝΟΜΑΣΙΑ ΟΤΑ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\nΔ;\"Authority 801\";Αττικής;1850;;;01/01/1850;\"Σύσταση\"\r\n";
+
+        var mockHandler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri?.ToString() ?? string.Empty;
+            if (uri.Contains("sid=701"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(settlementCsv, Encoding.UTF8, "text/csv")
+                };
+            }
+            if (uri.Contains("sid=801"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(authorityCsv, Encoding.UTF8, "text/csv")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var httpClient = new HttpClient(mockHandler);
+        var crawler = new IndexDiscoveryCrawler(
+            httpClient,
+            new IndexParser(),
+            _queueRepo,
+            new CrawlerOptions(),
+            NullLogger<IndexDiscoveryCrawler>.Instance
+        );
+
+        var settlementChannel = new SingleWriterChannel(100);
+        var settlementStorage = new SingleWriterStorageEngine(settlementChannel, _detailsRepo);
+        var settlementIngestion = new SettlementIngestionService(
+            httpClient,
+            _queueRepo,
+            _csvParser,
+            settlementChannel,
+            new ExponentialBackoffRetryPolicy(1, 1),
+            new IngestionOptions { Concurrency = 1, DelayMs = 0 },
+            NullLogger<SettlementIngestionService>.Instance
+        );
+
+        var authorityChannel = new LocalAuthorityChannel(100);
+        var authorityStorage = new LocalAuthorityStorageEngine(authorityChannel, _authorityDetailsRepo);
+        var authorityIngestion = new LocalAuthorityIngestionService(
+            httpClient,
+            _authorityQueueRepo,
+            _authorityCsvParser,
+            authorityChannel,
+            new ExponentialBackoffRetryPolicy(1, 1),
+            new LocalAuthorityIngestionOptions { Concurrency = 1, DelayMs = 0 },
+            NullLogger<LocalAuthorityIngestionService>.Instance
+        );
+
+        var cliOptions = new WorkerCliOptions
+        {
+            Entity = "all",
+            Mode = "download",
+            DatabasePath = _dbPath
+        };
+
+        var worker = new Worker(
+            _queueRepo,
+            crawler,
+            settlementIngestion,
+            settlementChannel,
+            settlementStorage,
+            cliOptions,
+            new TestHostApplicationLifetime(),
+            NullLogger<Worker>.Instance,
+            authorityRepository: _authorityQueueRepo,
+            authorityIngestionService: authorityIngestion,
+            authorityChannel: authorityChannel,
+            authorityStorageEngine: authorityStorage
+        );
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await worker.StartAsync(cts.Token);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(1, await _queueRepo.GetCountByStatusAsync("completed"));
+        Assert.Equal(1, await _detailsRepo.GetTotalChangesCountAsync());
+
+        Assert.Equal(1, await _authorityQueueRepo.GetCountByStatusAsync("completed"));
+        Assert.Equal(1, await _authorityDetailsRepo.GetTotalChangesCountAsync());
+    }
+
+    [Fact]
+    public void GenericHost_BuildAndValidateServiceProvider_ResolvesWorkerHostedServiceSuccessfully()
+    {
+        var services = new ServiceCollection();
+
+        var cliOptions = new WorkerCliOptions { DatabasePath = _dbPath, Mode = "download", Entity = "all" };
+        services.AddSingleton(cliOptions);
+
+        services.AddSingleton<ISqliteConnectionFactory>(_ => new SqliteConnectionFactory(_dbPath));
+        services.AddSingleton<ISqliteQueueRepository, SqliteQueueRepository>();
+        services.AddSingleton<ISqliteLocalAuthorityQueueRepository, SqliteLocalAuthorityQueueRepository>();
+        services.AddSingleton<ISettlementDetailsRepository, SqliteSettlementDetailsRepository>();
+        services.AddSingleton<ILocalAuthorityDetailsRepository, SqliteLocalAuthorityDetailsRepository>();
+
+        services.AddSingleton<ISettlementCsvParser, SettlementCsvParser>();
+        services.AddSingleton<ILocalAuthorityCsvParser, LocalAuthorityCsvParser>();
+        services.AddScoped<ISingleWriterChannel, SingleWriterChannel>();
+        services.AddScoped<ISingleWriterStorageEngine, SingleWriterStorageEngine>();
+
+        services.AddScoped<ILocalAuthorityChannel, LocalAuthorityChannel>();
+        services.AddScoped<ISingleWriterChannel<LocalAuthorityPayload>>(sp => sp.GetRequiredService<ILocalAuthorityChannel>());
+        services.AddScoped<ILocalAuthorityStorageEngine, LocalAuthorityStorageEngine>();
+
+        services.AddHttpClient<IIndexDiscoveryCrawler, IndexDiscoveryCrawler>();
+        services.AddHttpClient<ILocalAuthorityDiscoveryCrawler, LocalAuthorityDiscoveryCrawler>();
+        services.AddSingleton<IndexParser>();
+        services.AddSingleton(new CrawlerOptions());
+        services.AddSingleton(new LocalAuthorityCrawlerOptions());
+
+        services.AddHttpClient("Settlements");
+        services.AddHttpClient("Authorities");
+        services.AddSingleton<IRetryPolicy, ExponentialBackoffRetryPolicy>();
+        services.AddSingleton(new IngestionOptions());
+        services.AddSingleton(new LocalAuthorityIngestionOptions());
+
+        services.AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>();
+        services.AddLogging();
+
+        services.AddHostedService<Worker>();
+
+        var providerOptions = new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        };
+
+        var sp = services.BuildServiceProvider(providerOptions);
+        var hostedServices = sp.GetServices<IHostedService>();
+        Assert.Contains(hostedServices, s => s is Worker);
+    }
+
+    [Fact]
+    public async Task Worker_GenericHostScopeFactory_ExecutesAllEntitiesSequentially()
+    {
+        await _queueRepo.InitializeDatabaseAsync();
+        await _authorityQueueRepo.InitializeDatabaseAsync();
+
+        await _queueRepo.UpsertDiscoveredSettlementsAsync(new[]
+        {
+            new DiscoveredSettlement(701, "Settlement 701")
+        });
+        await _authorityQueueRepo.UpsertDiscoveredAuthoritiesAsync(new[]
+        {
+            new DiscoveredLocalAuthority(801, "Authority 801")
+        });
+
+        var settlementCsv = "\"ΟΝΟΜΑΣΙΑ ΟΙΚΙΣΜΟΥ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\n\"Settlement 701\";Αττικής;1850;;;01/01/1850;\"Πρωτεύουσα\"\r\n";
+        var authorityCsv = "\"ΕΙΔΟΣ ΟΤΑ\";\"ΟΝΟΜΑΣΙΑ ΟΤΑ\";ΝΟΜΟΣ;\"ΕΤΟΣ ΜΕΤΑΒΟΛΗΣ\";\"ΑΡΙΘΜΟΣ ΦΕΚ\";\"ΤΕΥΧΟΣ ΦΕΚ\";\"ΗΜΕΡΟΜΗΝΙΑ ΦΕΚ\";\"ΠΕΡΙΓΡΑΦΗ ΜΕΤΑΒΟΛΗΣ\"\r\nΔ;\"Authority 801\";Αττικής;1850;;;01/01/1850;\"Σύσταση\"\r\n";
+
+        var mockHandler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri?.ToString() ?? string.Empty;
+            if (uri.Contains("sid=701"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(settlementCsv, Encoding.UTF8, "text/csv")
+                };
+            }
+            if (uri.Contains("sid=801"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(authorityCsv, Encoding.UTF8, "text/csv")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var services = new ServiceCollection();
+
+        var cliOptions = new WorkerCliOptions
+        {
+            DatabasePath = _dbPath,
+            Mode = "download",
+            Entity = "all"
+        };
+        services.AddSingleton(cliOptions);
+
+        services.AddSingleton<ISqliteConnectionFactory>(_ => new SqliteConnectionFactory(_dbPath));
+        services.AddSingleton<ISqliteQueueRepository>(_queueRepo);
+        services.AddSingleton<ISqliteLocalAuthorityQueueRepository>(_authorityQueueRepo);
+        services.AddSingleton<ISettlementDetailsRepository>(_detailsRepo);
+        services.AddSingleton<ILocalAuthorityDetailsRepository>(_authorityDetailsRepo);
+
+        services.AddSingleton<ISettlementCsvParser, SettlementCsvParser>();
+        services.AddSingleton<ILocalAuthorityCsvParser, LocalAuthorityCsvParser>();
+        services.AddScoped<ISingleWriterChannel, SingleWriterChannel>();
+        services.AddScoped<ILocalAuthorityChannel, LocalAuthorityChannel>();
+
+        services.AddHttpClient<IIndexDiscoveryCrawler, IndexDiscoveryCrawler>();
+        services.AddHttpClient<ILocalAuthorityDiscoveryCrawler, LocalAuthorityDiscoveryCrawler>();
+        services.AddSingleton<IndexParser>();
+        services.AddSingleton(new CrawlerOptions());
+        services.AddSingleton(new LocalAuthorityCrawlerOptions());
+
+        services.AddHttpClient("Settlements").ConfigurePrimaryHttpMessageHandler(() => mockHandler);
+        services.AddHttpClient("Authorities").ConfigurePrimaryHttpMessageHandler(() => mockHandler);
+        services.AddSingleton<IRetryPolicy, ExponentialBackoffRetryPolicy>();
+        services.AddSingleton(new IngestionOptions { Concurrency = 1, DelayMs = 0 });
+        services.AddSingleton(new LocalAuthorityIngestionOptions { Concurrency = 1, DelayMs = 0 });
+
+        services.AddSingleton<IHostApplicationLifetime, TestHostApplicationLifetime>();
+        services.AddLogging();
+        services.AddHostedService<Worker>();
+
+        var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+
+        var worker = (Worker)sp.GetServices<IHostedService>().First(s => s is Worker);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await worker.StartAsync(cts.Token);
+        await worker.ExecuteTask!;
+
+        Assert.Equal(1, await _queueRepo.GetCountByStatusAsync("completed"));
+        Assert.Equal(1, await _detailsRepo.GetTotalChangesCountAsync());
+
+        Assert.Equal(1, await _authorityQueueRepo.GetCountByStatusAsync("completed"));
+        Assert.Equal(1, await _authorityDetailsRepo.GetTotalChangesCountAsync());
     }
 }

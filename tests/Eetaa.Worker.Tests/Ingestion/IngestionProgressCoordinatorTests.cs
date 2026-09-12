@@ -118,7 +118,11 @@ public class IngestionProgressCoordinatorTests
         coordinator.RecordPersisted();
 
         // Wait for timer to tick at least once
-        await Task.Delay(120);
+        var deadline = DateTime.UtcNow.AddMilliseconds(1000);
+        while (_logger.Entries.Count == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
 
         Assert.NotEmpty(_logger.Entries);
         var entry = _logger.Entries[0];
@@ -172,5 +176,48 @@ public class IngestionProgressCoordinatorTests
         Assert.Contains("Progress: 35/500 settlements (7.0%)", entry.Message);
         Assert.Contains("Failed: 5", entry.Message);
         Assert.Contains("Buffer: 15", entry.Message);
+    }
+
+    [Fact]
+    public void ParameterizedWithLocalAuthority_DisplaysActiveEntityLabelDuringProgressLogging()
+    {
+        using var coordinator = new IngestionProgressCoordinator(
+            _logger,
+            reportInterval: TimeSpan.FromMinutes(10),
+            reportItemCadence: 10,
+            entityLabel: "local authority");
+
+        Assert.Equal("local authority", coordinator.EntityLabel);
+
+        coordinator.Start(20, () => 3);
+
+        for (var i = 0; i < 10; i++)
+        {
+            coordinator.RecordPersisted();
+        }
+
+        Assert.Single(_logger.Entries);
+        var entry = _logger.Entries[0];
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Contains("Progress: 10/20 local authorities (50.0%)", entry.Message);
+        Assert.Contains("Buffer: 3", entry.Message);
+    }
+
+    [Fact]
+    public void Start_WithOverriddenEntityLabel_UpdatesActiveEntityLabel()
+    {
+        using var coordinator = new IngestionProgressCoordinator(_logger, reportInterval: TimeSpan.FromMinutes(10), reportItemCadence: 10);
+        coordinator.Start(10, () => 0, entityLabel: "local authority");
+
+        Assert.Equal("local authority", coordinator.EntityLabel);
+
+        for (var i = 0; i < 10; i++)
+        {
+            coordinator.RecordPersisted();
+        }
+
+        Assert.Single(_logger.Entries);
+        var entry = _logger.Entries[0];
+        Assert.Contains("Progress: 10/10 local authorities (100.0%)", entry.Message);
     }
 }

@@ -39,9 +39,12 @@ try
     // Register CSV & Storage channel services
     builder.Services.AddSingleton<ISettlementCsvParser, SettlementCsvParser>();
     builder.Services.AddSingleton<ILocalAuthorityCsvParser, LocalAuthorityCsvParser>();
-    builder.Services.AddSingleton<ISingleWriterChannel, SingleWriterChannel>();
-    builder.Services.AddSingleton<IIngestionProgressCoordinator, IngestionProgressCoordinator>();
-    builder.Services.AddSingleton<ISingleWriterStorageEngine, SingleWriterStorageEngine>();
+    builder.Services.AddScoped<ISingleWriterChannel, SingleWriterChannel>();
+    builder.Services.AddScoped<ISingleWriterStorageEngine, SingleWriterStorageEngine>();
+
+    builder.Services.AddScoped<ILocalAuthorityChannel, LocalAuthorityChannel>();
+    builder.Services.AddScoped<ISingleWriterChannel<LocalAuthorityPayload>>(sp => sp.GetRequiredService<ILocalAuthorityChannel>());
+    builder.Services.AddScoped<ILocalAuthorityStorageEngine, LocalAuthorityStorageEngine>();
 
     // Register Discovery crawler
     builder.Services.AddHttpClient<IIndexDiscoveryCrawler, IndexDiscoveryCrawler>(client =>
@@ -71,14 +74,28 @@ try
     });
 
     // Register Ingestion & Retry services
-    builder.Services.AddHttpClient<ISettlementIngestionService, SettlementIngestionService>(client =>
+    builder.Services.AddHttpClient("Settlements", client =>
     {
         client.Timeout = TimeSpan.FromSeconds(30);
         client.DefaultRequestHeaders.UserAgent.ParseAdd("EetaaSettlementWorker/1.0 (+https://github.com/eetaa)");
     });
+    builder.Services.AddHttpClient("Authorities", client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("EetaaLocalAuthorityWorker/1.0 (+https://github.com/eetaa)");
+    });
     builder.Services.AddSingleton<IRetryPolicy, ExponentialBackoffRetryPolicy>();
     builder.Services.AddSingleton(new IngestionOptions
     {
+        CsvBaseUrl = "https://eetaa.gr/eetaa/metaboles/oikmet2csv.php",
+        Concurrency = cliOptions.Concurrency,
+        DelayMs = cliOptions.DelayMs,
+        RetryFailed = cliOptions.RetryFailed,
+        Force = cliOptions.Force
+    });
+    builder.Services.AddSingleton(new LocalAuthorityIngestionOptions
+    {
+        CsvBaseUrl = "https://eetaa.gr/eetaa/metaboles/dkmet2csv.php",
         Concurrency = cliOptions.Concurrency,
         DelayMs = cliOptions.DelayMs,
         RetryFailed = cliOptions.RetryFailed,

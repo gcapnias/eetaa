@@ -18,7 +18,7 @@ public class ExponentialBackoffRetryPolicyTests
         {
             attempts++;
             return Task.FromResult("OK");
-        }, settlementId: 100);
+        }, entityId: 100);
 
         Assert.Equal("OK", result);
         Assert.Equal(1, attempts);
@@ -38,7 +38,7 @@ public class ExponentialBackoffRetryPolicyTests
                 throw new HttpRequestException("Bad Gateway", null, HttpStatusCode.BadGateway);
             }
             return Task.FromResult("Recovered");
-        }, settlementId: 200);
+        }, entityId: 200);
 
         Assert.Equal("Recovered", result);
         Assert.Equal(3, attempts);
@@ -58,7 +58,7 @@ public class ExponentialBackoffRetryPolicyTests
                 throw new HttpRequestException("Rate limited", null, HttpStatusCode.TooManyRequests);
             }
             return Task.FromResult("SuccessAfter429");
-        }, settlementId: 300);
+        }, entityId: 300);
 
         Assert.Equal("SuccessAfter429", result);
         Assert.Equal(2, attempts);
@@ -75,7 +75,7 @@ public class ExponentialBackoffRetryPolicyTests
             {
                 attempts++;
                 throw new HttpRequestException("Gateway Timeout", null, HttpStatusCode.GatewayTimeout);
-            }, settlementId: 400));
+            }, entityId: 400));
 
         Assert.Equal(3, attempts); // 1 initial + 2 retries
         Assert.Equal(HttpStatusCode.GatewayTimeout, ex.StatusCode);
@@ -92,7 +92,7 @@ public class ExponentialBackoffRetryPolicyTests
             {
                 attempts++;
                 throw new HttpRequestException("Not Found", null, HttpStatusCode.NotFound);
-            }, settlementId: 500));
+            }, entityId: 500));
 
         Assert.Equal(1, attempts);
     }

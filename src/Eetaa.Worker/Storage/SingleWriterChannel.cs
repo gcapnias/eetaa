@@ -2,18 +2,18 @@ using System.Threading.Channels;
 
 namespace Eetaa.Worker.Storage;
 
-public interface ISingleWriterChannel
+public interface ISingleWriterChannel<T>
 {
-    ChannelWriter<SettlementPayload> Writer { get; }
-    ChannelReader<SettlementPayload> Reader { get; }
+    ChannelWriter<T> Writer { get; }
+    ChannelReader<T> Reader { get; }
     int Count { get; }
-    ValueTask EnqueueAsync(SettlementPayload payload, CancellationToken cancellationToken = default);
+    ValueTask EnqueueAsync(T payload, CancellationToken cancellationToken = default);
     void Complete(Exception? error = null);
 }
 
-public sealed class SingleWriterChannel : ISingleWriterChannel
+public class SingleWriterChannel<T> : ISingleWriterChannel<T>
 {
-    private readonly Channel<SettlementPayload> _channel;
+    private readonly Channel<T> _channel;
 
     public SingleWriterChannel(int capacity = 1000)
     {
@@ -23,14 +23,14 @@ public sealed class SingleWriterChannel : ISingleWriterChannel
             SingleReader = true,
             FullMode = BoundedChannelFullMode.Wait
         };
-        _channel = Channel.CreateBounded<SettlementPayload>(options);
+        _channel = Channel.CreateBounded<T>(options);
     }
 
-    public ChannelWriter<SettlementPayload> Writer => _channel.Writer;
-    public ChannelReader<SettlementPayload> Reader => _channel.Reader;
+    public ChannelWriter<T> Writer => _channel.Writer;
+    public ChannelReader<T> Reader => _channel.Reader;
     public int Count => _channel.Reader.Count;
 
-    public ValueTask EnqueueAsync(SettlementPayload payload, CancellationToken cancellationToken = default)
+    public ValueTask EnqueueAsync(T payload, CancellationToken cancellationToken = default)
     {
         return _channel.Writer.WriteAsync(payload, cancellationToken);
     }
@@ -38,5 +38,27 @@ public sealed class SingleWriterChannel : ISingleWriterChannel
     public void Complete(Exception? error = null)
     {
         _channel.Writer.TryComplete(error);
+    }
+}
+
+public interface ISingleWriterChannel : ISingleWriterChannel<SettlementPayload>
+{
+}
+
+public sealed class SingleWriterChannel : SingleWriterChannel<SettlementPayload>, ISingleWriterChannel
+{
+    public SingleWriterChannel(int capacity = 1000) : base(capacity)
+    {
+    }
+}
+
+public interface ILocalAuthorityChannel : ISingleWriterChannel<LocalAuthorityPayload>
+{
+}
+
+public sealed class LocalAuthorityChannel : SingleWriterChannel<LocalAuthorityPayload>, ILocalAuthorityChannel
+{
+    public LocalAuthorityChannel(int capacity = 1000) : base(capacity)
+    {
     }
 }

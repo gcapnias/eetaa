@@ -8,7 +8,7 @@ public interface IRetryPolicy
 {
     Task<T> ExecuteWithRetryAsync<T>(
         Func<CancellationToken, Task<T>> operation,
-        long settlementId,
+        long entityId = 0,
         CancellationToken cancellationToken = default);
 }
 
@@ -31,7 +31,7 @@ public sealed class ExponentialBackoffRetryPolicy : IRetryPolicy
 
     public async Task<T> ExecuteWithRetryAsync<T>(
         Func<CancellationToken, Task<T>> operation,
-        long settlementId,
+        long entityId = 0,
         CancellationToken cancellationToken = default)
     {
         var attempt = 0;
@@ -61,8 +61,8 @@ public sealed class ExponentialBackoffRetryPolicy : IRetryPolicy
 
                 _logger?.LogWarning(
                     ex,
-                    "Transient error downloading settlement {SettlementId} on attempt {Attempt}/{MaxRetries}. Retrying in {DelayMs}ms.",
-                    settlementId, attempt, _maxRetries, (int)totalDelay.TotalMilliseconds);
+                    "Transient error downloading entity {EntityId} on attempt {Attempt}/{MaxRetries}. Retrying in {DelayMs}ms.",
+                    entityId, attempt, _maxRetries, (int)totalDelay.TotalMilliseconds);
 
                 await Task.Delay(totalDelay, cancellationToken);
             }
@@ -70,8 +70,8 @@ public sealed class ExponentialBackoffRetryPolicy : IRetryPolicy
             {
                 _logger?.LogError(
                     ex,
-                    "Permanent or exhausted failure for settlement {SettlementId} on attempt {Attempt}/{MaxRetries}.",
-                    settlementId, attempt, _maxRetries);
+                    "Permanent or exhausted failure for entity {EntityId} on attempt {Attempt}/{MaxRetries}.",
+                    entityId, attempt, _maxRetries);
                 throw;
             }
         }

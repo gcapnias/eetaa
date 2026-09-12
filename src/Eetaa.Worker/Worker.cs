@@ -118,99 +118,104 @@ public sealed class Worker : BackgroundService
             }
             _logger.LogInformation("SQLite database initialized at {DbPath}", _cliOptions.DatabasePath);
 
-            // 2. In-flight recovery: reset any 'processing' items left behind by previous crashes
-            if (runSettlements)
+            // 2. Dual-queue in-flight recovery: reset any 'processing' items left behind by previous crashes
+            var resetCount = await _repository.ResetInFlightProcessingAsync(stoppingToken);
+            if (resetCount > 0)
             {
-                var resetCount = await _repository.ResetInFlightProcessingAsync(stoppingToken);
-                if (resetCount > 0)
-                {
-                    _logger.LogInformation("Reset {ResetCount} orphaned in-flight 'processing' settlement(s) to 'pending'", resetCount);
-                }
-
-                var initialCount = await _repository.GetCountAsync(stoppingToken);
-                _logger.LogInformation("Current settlement_queue record count: {Count}", initialCount);
+                _logger.LogInformation("Reset {ResetCount} orphaned in-flight 'processing' settlement(s) to 'pending'", resetCount);
             }
 
-            if (runAuthorities && _authorityRepository != null)
+            if (_authorityRepository != null)
             {
                 var resetAuthCount = await _authorityRepository.ResetInFlightProcessingAsync(stoppingToken);
                 if (resetAuthCount > 0)
                 {
                     _logger.LogInformation("Reset {ResetCount} orphaned in-flight 'processing' local authority(s) to 'pending'", resetAuthCount);
                 }
+            }
 
+            if (runSettlements)
+            {
+                var initialCount = await _repository.GetCountAsync(stoppingToken);
+                _logger.LogInformation("Current settlement_queue record count: {Count}", initialCount);
+            }
+
+            if (runAuthorities && _authorityRepository != null)
+            {
                 var initialAuthCount = await _authorityRepository.GetCountAsync(stoppingToken);
                 _logger.LogInformation("Current local_authority_queue record count: {Count}", initialAuthCount);
             }
 
-            // 3. Execute according to mode
-            if (_cliOptions.Mode is "all" or "discover")
-            {
-                if (runSettlements)
-                {
-                    _logger.LogInformation("Executing Settlement Index Discovery phase...");
-                    var result = await _discoveryCrawler.CrawlAsync(stoppingToken);
-                    _logger.LogInformation(
-                        "Settlement discovery complete: {Pages} pages processed, {Discovered} settlements in queue",
-                        result.PagesProcessed, result.TotalSettlementsDiscovered);
-                }
+            // 3. Execute according to mode and entity in sequential order:
+            // (1) Settlement Discovery -> (2) Settlement Ingestion -> (3) Local Authority Discovery -> (4) Local Authority Ingestion
+            var isDiscoverMode = _cliOptions.Mode is "all" or "discover";
+            var isDownloadMode = _cliOptions.Mode is "all" or "download";
 
-                if (runAuthorities && _authorityCrawler != null)
+            // Stage 1: Settlement Discovery
+            if (runSettlements && isDiscoverMode)
+            {
+                _logger.LogInformation("Executing Settlement Index Discovery phase...");
+                var result = await _discoveryCrawler.CrawlAsync(stoppingToken);
+                _logger.LogInformation(
+                    "Settlement discovery complete: {Pages} pages processed, {Discovered} settlements in queue",
+                    result.PagesProcessed, result.TotalSettlementsDiscovered);
+            }
+
+            // Stage 2: Settlement Ingestion
+            if (runSettlements && isDownloadMode)
+            {
+                if (_serviceScopeFactory != null)
                 {
-                    _logger.LogInformation("Executing Local Authority Index Discovery phase...");
-                    var result = await _authorityCrawler.CrawlAsync(stoppingToken);
-                    _logger.LogInformation(
-                        "Local authority discovery complete: {Pages} pages processed, {Discovered} local authorities in queue",
-                        result.PagesProcessed, result.TotalDiscovered);
+                    using var scope = _serviceScopeFactory.CreateScope();
+                    var channel = scope.ServiceProvider.GetRequiredService<ISingleWriterChannel>();
+                    using var coordinator = new IngestionProgressCoordinator(
+                        scope.ServiceProvider.GetRequiredService<ILogger<IngestionProgressCoordinator>>(),
+                        entityLabel: "settlement");
+                    var storageEngine = ActivatorUtilities.CreateInstance<SingleWriterStorageEngine>(
+                        scope.ServiceProvider, channel, coordinator);
+                    var clientFactory = scope.ServiceProvider.GetService<IHttpClientFactory>();
+                    var httpClient = clientFactory?.CreateClient("Settlements") ?? new HttpClient();
+                    var ingestionService = ActivatorUtilities.CreateInstance<SettlementIngestionService>(
+                        scope.ServiceProvider, httpClient, channel, coordinator);
+                    await RunIngestionStageAsync("Settlement", ingestionService.IngestAsync, storageEngine.ProcessChannelAsync, channel, coordinator, stoppingToken);
+                }
+                else if (_ingestionService != null && _channel != null && _storageEngine != null)
+                {
+                    await RunIngestionStageAsync("Settlement", _ingestionService.IngestAsync, _storageEngine.ProcessChannelAsync, _channel, _progressCoordinator, stoppingToken);
                 }
             }
 
-            if (_cliOptions.Mode is "all" or "download")
+            // Stage 3: Local Authority Discovery
+            if (runAuthorities && isDiscoverMode && _authorityCrawler != null)
             {
-                if (runSettlements)
-                {
-                    if (_serviceScopeFactory != null)
-                    {
-                        using var scope = _serviceScopeFactory.CreateScope();
-                        var channel = scope.ServiceProvider.GetRequiredService<ISingleWriterChannel>();
-                        using var coordinator = new IngestionProgressCoordinator(
-                            scope.ServiceProvider.GetRequiredService<ILogger<IngestionProgressCoordinator>>(),
-                            entityLabel: "settlement");
-                        var storageEngine = ActivatorUtilities.CreateInstance<SingleWriterStorageEngine>(
-                            scope.ServiceProvider, channel, coordinator);
-                        var clientFactory = scope.ServiceProvider.GetService<IHttpClientFactory>();
-                        var httpClient = clientFactory?.CreateClient("Settlements") ?? new HttpClient();
-                        var ingestionService = ActivatorUtilities.CreateInstance<SettlementIngestionService>(
-                            scope.ServiceProvider, httpClient, channel, coordinator);
-                        await RunIngestionStageAsync("Settlement", ingestionService.IngestAsync, storageEngine.ProcessChannelAsync, channel, coordinator, stoppingToken);
-                    }
-                    else if (_ingestionService != null && _channel != null && _storageEngine != null)
-                    {
-                        await RunIngestionStageAsync("Settlement", _ingestionService.IngestAsync, _storageEngine.ProcessChannelAsync, _channel, _progressCoordinator, stoppingToken);
-                    }
-                }
+                _logger.LogInformation("Executing Local Authority Index Discovery phase...");
+                var result = await _authorityCrawler.CrawlAsync(stoppingToken);
+                _logger.LogInformation(
+                    "Local authority discovery complete: {Pages} pages processed, {Discovered} local authorities in queue",
+                    result.PagesProcessed, result.TotalDiscovered);
+            }
 
-                if (runAuthorities)
+            // Stage 4: Local Authority Ingestion
+            if (runAuthorities && isDownloadMode)
+            {
+                if (_serviceScopeFactory != null)
                 {
-                    if (_serviceScopeFactory != null)
-                    {
-                        using var scope = _serviceScopeFactory.CreateScope();
-                        var channel = scope.ServiceProvider.GetRequiredService<ILocalAuthorityChannel>();
-                        using var coordinator = new IngestionProgressCoordinator(
-                            scope.ServiceProvider.GetRequiredService<ILogger<IngestionProgressCoordinator>>(),
-                            entityLabel: "local authority");
-                        var storageEngine = ActivatorUtilities.CreateInstance<LocalAuthorityStorageEngine>(
-                            scope.ServiceProvider, channel, coordinator);
-                        var clientFactory = scope.ServiceProvider.GetService<IHttpClientFactory>();
-                        var httpClient = clientFactory?.CreateClient("Authorities") ?? new HttpClient();
-                        var ingestionService = ActivatorUtilities.CreateInstance<LocalAuthorityIngestionService>(
-                            scope.ServiceProvider, httpClient, channel, coordinator);
-                        await RunIngestionStageAsync("Local authority", ingestionService.IngestAsync, storageEngine.ProcessChannelAsync, channel, coordinator, stoppingToken);
-                    }
-                    else if (_authorityIngestionService != null && _authorityChannel != null && _authorityStorageEngine != null)
-                    {
-                        await RunIngestionStageAsync("Local authority", _authorityIngestionService.IngestAsync, _authorityStorageEngine.ProcessChannelAsync, _authorityChannel, _authorityProgressCoordinator, stoppingToken);
-                    }
+                    using var scope = _serviceScopeFactory.CreateScope();
+                    var channel = scope.ServiceProvider.GetRequiredService<ILocalAuthorityChannel>();
+                    using var coordinator = new IngestionProgressCoordinator(
+                        scope.ServiceProvider.GetRequiredService<ILogger<IngestionProgressCoordinator>>(),
+                        entityLabel: "local authority");
+                    var storageEngine = ActivatorUtilities.CreateInstance<LocalAuthorityStorageEngine>(
+                        scope.ServiceProvider, channel, coordinator);
+                    var clientFactory = scope.ServiceProvider.GetService<IHttpClientFactory>();
+                    var httpClient = clientFactory?.CreateClient("Authorities") ?? new HttpClient();
+                    var ingestionService = ActivatorUtilities.CreateInstance<LocalAuthorityIngestionService>(
+                        scope.ServiceProvider, httpClient, channel, coordinator);
+                    await RunIngestionStageAsync("Local authority", ingestionService.IngestAsync, storageEngine.ProcessChannelAsync, channel, coordinator, stoppingToken);
+                }
+                else if (_authorityIngestionService != null && _authorityChannel != null && _authorityStorageEngine != null)
+                {
+                    await RunIngestionStageAsync("Local authority", _authorityIngestionService.IngestAsync, _authorityStorageEngine.ProcessChannelAsync, _authorityChannel, _authorityProgressCoordinator, stoppingToken);
                 }
             }
 
@@ -331,18 +336,19 @@ public sealed class Worker : BackgroundService
             // Arm deferred drain timeout exclusively during shutdown/drain
             drainCts.CancelAfter(_drainTimeout);
 
+            var drainTimedOut = false;
             try
             {
                 await storageTask;
             }
             catch (OperationCanceledException) when (drainCts.IsCancellationRequested)
             {
-                // Drain timed out
+                drainTimedOut = true;
             }
 
             progressCoordinator?.Complete();
 
-            if (channel.Count > 0 || drainCts.IsCancellationRequested)
+            if (channel.Count > 0 || drainTimedOut)
             {
                 _logger.LogError(
                     "Channel drain timed out with {Count} item(s) remaining in buffer.",

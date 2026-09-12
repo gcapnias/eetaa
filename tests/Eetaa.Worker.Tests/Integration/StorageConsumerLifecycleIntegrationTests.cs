@@ -341,6 +341,7 @@ public class StorageConsumerLifecycleIntegrationTests : IDisposable
             delayMs: 0
         );
 
+        Environment.ExitCode = 0;
         await context.Worker.StartAsync(CancellationToken.None);
         await context.Worker.ExecuteTask!;
 
@@ -436,6 +437,7 @@ public class StorageConsumerLifecycleIntegrationTests : IDisposable
         );
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        Environment.ExitCode = 0;
         await context.Worker.StartAsync(cts.Token);
         await context.Worker.ExecuteTask!;
 

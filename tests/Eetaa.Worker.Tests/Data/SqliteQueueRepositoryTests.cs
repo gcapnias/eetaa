@@ -69,6 +69,22 @@ public class SqliteQueueRepositoryTests : IDisposable
             var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
             Assert.Equal(1, count);
         }
+
+        // Verify local_authority_queue table exists
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='local_authority_queue';";
+            var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+            Assert.Equal(1, count);
+        }
+
+        // Verify dkmet_details table exists
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dkmet_details';";
+            var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+            Assert.Equal(1, count);
+        }
     }
 
     [Fact]

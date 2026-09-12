@@ -32,9 +32,11 @@ try
     builder.Services.AddSingleton<ISqliteConnectionFactory>(_ => new SqliteConnectionFactory(cliOptions.DatabasePath));
     builder.Services.AddSingleton<ISqliteQueueRepository, SqliteQueueRepository>();
     builder.Services.AddSingleton<ISettlementDetailsRepository, SqliteSettlementDetailsRepository>();
+    builder.Services.AddSingleton<ILocalAuthorityDetailsRepository, SqliteLocalAuthorityDetailsRepository>();
 
     // Register CSV & Storage channel services
     builder.Services.AddSingleton<ISettlementCsvParser, SettlementCsvParser>();
+    builder.Services.AddSingleton<ILocalAuthorityCsvParser, LocalAuthorityCsvParser>();
     builder.Services.AddSingleton<ISingleWriterChannel, SingleWriterChannel>();
     builder.Services.AddSingleton<IIngestionProgressCoordinator, IngestionProgressCoordinator>();
     builder.Services.AddSingleton<ISingleWriterStorageEngine, SingleWriterStorageEngine>();

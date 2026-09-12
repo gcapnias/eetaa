@@ -34,10 +34,11 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
         using var connection = _connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        // Apply performance pragmas
+        // Apply performance and integrity pragmas
         using (var pragmaCmd = connection.CreateCommand())
         {
             pragmaCmd.CommandText = @"
+                PRAGMA foreign_keys = ON;
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
             ";
@@ -81,6 +82,41 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
 
                 CREATE INDEX IF NOT EXISTS idx_oikmet_details_settlement_id ON oikmet_details (settlement_id);
                 CREATE INDEX IF NOT EXISTS idx_oikmet_details_fek_date ON oikmet_details (fek_date);
+
+                CREATE TABLE IF NOT EXISTS local_authority_queue (
+                    authority_id INTEGER PRIMARY KEY,
+                    name_hint TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT NULL,
+                    completed_at TEXT NULL,
+                    error_message TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_local_authority_queue_status ON local_authority_queue (status);
+
+                CREATE TABLE IF NOT EXISTS dkmet_details (
+                    authority_id INTEGER NOT NULL,
+                    change_order INTEGER NOT NULL,
+                    ota_type TEXT NULL,
+                    authority_name TEXT NOT NULL,
+                    nomos TEXT NULL,
+                    change_year INTEGER NULL,
+                    fek_number TEXT NULL,
+                    fek_issue TEXT NULL,
+                    fek_date TEXT NULL,
+                    fek_date_raw TEXT NULL,
+                    change_description TEXT NOT NULL,
+                    raw_record TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    PRIMARY KEY (authority_id, change_order),
+                    FOREIGN KEY (authority_id) REFERENCES local_authority_queue(authority_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_dkmet_details_authority_id ON dkmet_details (authority_id);
+                CREATE INDEX IF NOT EXISTS idx_dkmet_details_fek_date ON dkmet_details (fek_date);
             ";
             await createCmd.ExecuteNonQueryAsync(cancellationToken);
         }

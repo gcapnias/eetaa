@@ -81,6 +81,20 @@ public sealed class SqliteQueueRepository : ISqliteQueueRepository
 
                 CREATE INDEX IF NOT EXISTS idx_oikmet_details_settlement_id ON oikmet_details (settlement_id);
                 CREATE INDEX IF NOT EXISTS idx_oikmet_details_fek_date ON oikmet_details (fek_date);
+
+                CREATE TABLE IF NOT EXISTS local_authority_queue (
+                    authority_id INTEGER PRIMARY KEY,
+                    name_hint TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT NULL,
+                    completed_at TEXT NULL,
+                    error_message TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_local_authority_queue_status ON local_authority_queue (status);
             ";
             await createCmd.ExecuteNonQueryAsync(cancellationToken);
         }

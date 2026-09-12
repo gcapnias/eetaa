@@ -19,6 +19,7 @@ public class EndToEndWorkerLifecycleTests : IDisposable
     private readonly string _dbPath;
     private readonly SqliteConnectionFactory _connectionFactory;
     private readonly SqliteQueueRepository _queueRepo;
+    private readonly SqliteLocalAuthorityQueueRepository _authorityQueueRepo;
     private readonly SqliteSettlementDetailsRepository _detailsRepo;
     private readonly SettlementCsvParser _csvParser;
 
@@ -27,6 +28,7 @@ public class EndToEndWorkerLifecycleTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"eetaa_e2e_{Guid.NewGuid():N}.db");
         _connectionFactory = new SqliteConnectionFactory(_dbPath);
         _queueRepo = new SqliteQueueRepository(_connectionFactory);
+        _authorityQueueRepo = new SqliteLocalAuthorityQueueRepository(_connectionFactory);
         _detailsRepo = new SqliteSettlementDetailsRepository(_connectionFactory);
         _csvParser = new SettlementCsvParser();
     }
@@ -323,5 +325,84 @@ public class EndToEndWorkerLifecycleTests : IDisposable
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Information, finalLog.Level);
         Assert.Contains("Progress: 2/2 settlements (100.0%)", finalLog.Message);
         Assert.Contains("Failed: 0", finalLog.Message);
+    }
+
+    [Fact]
+    public async Task Worker_ExecutesLocalAuthorityDiscoverModeOnly()
+    {
+        var htmlContent = @"
+            <html><body>
+            <table class='tbl_metaboles'>
+                <tr><td>1</td><td><a href='dkmet_details.php?id=501'>Δ. Θεσσαλονίκης (Θεσσαλονίκης)</a></td></tr>
+                <tr><td>2</td><td><a href='dkmet_details.php?id=502'>Κ. Πανοράματος (Θεσσαλονίκης)</a></td></tr>
+            </table>
+            </body></html>
+        ";
+
+        var mockHandler = new MockHttpMessageHandler(req =>
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(htmlContent, Encoding.UTF8, "text/html")
+            };
+        });
+
+        var httpClient = new HttpClient(mockHandler);
+        var settlementCrawler = new IndexDiscoveryCrawler(
+            httpClient,
+            new IndexParser(),
+            _queueRepo,
+            new CrawlerOptions { BaseUrl = "https://eetaa.gr/metaboles/oik_metaboles.php", StartPage = 1, MaxPages = 1 },
+            NullLogger<IndexDiscoveryCrawler>.Instance
+        );
+        var authorityCrawler = new LocalAuthorityDiscoveryCrawler(
+            httpClient,
+            new IndexParser(),
+            _authorityQueueRepo,
+            new LocalAuthorityCrawlerOptions { BaseUrl = "https://eetaa.gr/metaboles/dk_metaboles.php", StartPage = 1, MaxPages = 1 },
+            NullLogger<LocalAuthorityDiscoveryCrawler>.Instance
+        );
+
+        var channel = new SingleWriterChannel(100);
+        var storageEngine = new SingleWriterStorageEngine(channel, _detailsRepo);
+        var ingestionService = new SettlementIngestionService(
+            httpClient,
+            _queueRepo,
+            _csvParser,
+            channel,
+            new ExponentialBackoffRetryPolicy(1, 1),
+            new IngestionOptions(),
+            NullLogger<SettlementIngestionService>.Instance
+        );
+
+        var cliOptions = new WorkerCliOptions
+        {
+            Entity = "authorities",
+            Mode = "discover",
+            DatabasePath = _dbPath
+        };
+
+        var worker = new Worker(
+            _queueRepo,
+            settlementCrawler,
+            ingestionService,
+            channel,
+            storageEngine,
+            cliOptions,
+            new TestHostApplicationLifetime(),
+            NullLogger<Worker>.Instance,
+            authorityRepository: _authorityQueueRepo,
+            authorityCrawler: authorityCrawler
+        );
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await worker.StartAsync(cts.Token);
+        await worker.ExecuteTask!;
+
+        var authorityPending = await _authorityQueueRepo.GetCountByStatusAsync("pending");
+        var settlementPending = await _queueRepo.GetCountByStatusAsync("pending");
+
+        Assert.Equal(2, authorityPending);
+        Assert.Equal(0, settlementPending);
     }
 }

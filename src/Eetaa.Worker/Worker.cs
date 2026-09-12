@@ -23,6 +23,8 @@ public sealed class Worker : BackgroundService
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<Worker> _logger;
     private readonly TimeSpan _drainTimeout;
+    private readonly ISqliteLocalAuthorityQueueRepository? _authorityRepository;
+    private readonly ILocalAuthorityDiscoveryCrawler? _authorityCrawler;
 
     public Worker(
         ISqliteQueueRepository repository,
@@ -34,7 +36,9 @@ public sealed class Worker : BackgroundService
         IHostApplicationLifetime lifetime,
         ILogger<Worker> logger,
         IIngestionProgressCoordinator? progressCoordinator = null,
-        TimeSpan? drainTimeout = null)
+        TimeSpan? drainTimeout = null,
+        ISqliteLocalAuthorityQueueRepository? authorityRepository = null,
+        ILocalAuthorityDiscoveryCrawler? authorityCrawler = null)
     {
         _repository = repository;
         _discoveryCrawler = discoveryCrawler;
@@ -46,41 +50,79 @@ public sealed class Worker : BackgroundService
         _logger = logger;
         _progressCoordinator = progressCoordinator;
         _drainTimeout = drainTimeout ?? TimeSpan.FromSeconds(30);
+        _authorityRepository = authorityRepository;
+        _authorityCrawler = authorityCrawler;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
-            _logger.LogInformation("Worker starting in mode: {Mode}, db: {Db}", _cliOptions.Mode, _cliOptions.DatabasePath);
+            _logger.LogInformation("Worker starting in mode: {Mode}, entity: {Entity}, db: {Db}", _cliOptions.Mode, _cliOptions.Entity, _cliOptions.DatabasePath);
+
+            var runSettlements = _cliOptions.Entity is "all" or "settlements";
+            var runAuthorities = _cliOptions.Entity is "all" or "authorities";
 
             // 1. Initialize SQLite schema and PRAGMAs
             await _repository.InitializeDatabaseAsync(stoppingToken);
+            if (_authorityRepository != null)
+            {
+                await _authorityRepository.InitializeDatabaseAsync(stoppingToken);
+            }
             _logger.LogInformation("SQLite database initialized at {DbPath}", _cliOptions.DatabasePath);
 
             // 2. In-flight recovery: reset any 'processing' items left behind by previous crashes
-            var resetCount = await _repository.ResetInFlightProcessingAsync(stoppingToken);
-            if (resetCount > 0)
+            if (runSettlements)
             {
-                _logger.LogInformation("Reset {ResetCount} orphaned in-flight 'processing' settlement(s) to 'pending'", resetCount);
+                var resetCount = await _repository.ResetInFlightProcessingAsync(stoppingToken);
+                if (resetCount > 0)
+                {
+                    _logger.LogInformation("Reset {ResetCount} orphaned in-flight 'processing' settlement(s) to 'pending'", resetCount);
+                }
+
+                var initialCount = await _repository.GetCountAsync(stoppingToken);
+                _logger.LogInformation("Current settlement_queue record count: {Count}", initialCount);
             }
 
-            var initialCount = await _repository.GetCountAsync(stoppingToken);
-            _logger.LogInformation("Current settlement_queue record count: {Count}", initialCount);
+            if (runAuthorities && _authorityRepository != null)
+            {
+                var resetAuthCount = await _authorityRepository.ResetInFlightProcessingAsync(stoppingToken);
+                if (resetAuthCount > 0)
+                {
+                    _logger.LogInformation("Reset {ResetCount} orphaned in-flight 'processing' local authority(s) to 'pending'", resetAuthCount);
+                }
+
+                var initialAuthCount = await _authorityRepository.GetCountAsync(stoppingToken);
+                _logger.LogInformation("Current local_authority_queue record count: {Count}", initialAuthCount);
+            }
 
             // 3. Execute according to mode
             if (_cliOptions.Mode is "all" or "discover")
             {
-                _logger.LogInformation("Executing Index Discovery phase...");
-                var result = await _discoveryCrawler.CrawlAsync(stoppingToken);
-                _logger.LogInformation(
-                    "Discovery complete: {Pages} pages processed, {Discovered} settlements in queue",
-                    result.PagesProcessed, result.TotalSettlementsDiscovered);
+                if (runSettlements)
+                {
+                    _logger.LogInformation("Executing Settlement Index Discovery phase...");
+                    var result = await _discoveryCrawler.CrawlAsync(stoppingToken);
+                    _logger.LogInformation(
+                        "Settlement discovery complete: {Pages} pages processed, {Discovered} settlements in queue",
+                        result.PagesProcessed, result.TotalSettlementsDiscovered);
+                }
+
+                if (runAuthorities && _authorityCrawler != null)
+                {
+                    _logger.LogInformation("Executing Local Authority Index Discovery phase...");
+                    var result = await _authorityCrawler.CrawlAsync(stoppingToken);
+                    _logger.LogInformation(
+                        "Local authority discovery complete: {Pages} pages processed, {Discovered} local authorities in queue",
+                        result.PagesProcessed, result.TotalSettlementsDiscovered);
+                }
             }
 
             if (_cliOptions.Mode is "all" or "download")
             {
-                _logger.LogInformation("Executing Settlement CSV Ingestion phase...");
+                if (runSettlements)
+                {
+                    _logger.LogInformation("Executing Settlement CSV Ingestion phase...");
 
                 // Deferred drain registration: consumer runs unbounded during active ingestion
                 using var drainCts = new CancellationTokenSource();
@@ -180,14 +222,29 @@ public sealed class Worker : BackgroundService
                     throw ingestionException;
                 }
             }
+            }
 
-            var finalPending = await _repository.GetCountByStatusAsync("pending", stoppingToken);
-            var finalCompleted = await _repository.GetCountByStatusAsync("completed", stoppingToken);
-            var finalFailed = await _repository.GetCountByStatusAsync("failed", stoppingToken);
-            var finalTotal = await _repository.GetCountAsync(stoppingToken);
-            _logger.LogInformation(
-                "Summary: {Total} total settlements in queue ({Pending} pending, {Completed} completed, {Failed} failed).",
-                finalTotal, finalPending, finalCompleted, finalFailed);
+            if (runSettlements)
+            {
+                var finalPending = await _repository.GetCountByStatusAsync("pending", stoppingToken);
+                var finalCompleted = await _repository.GetCountByStatusAsync("completed", stoppingToken);
+                var finalFailed = await _repository.GetCountByStatusAsync("failed", stoppingToken);
+                var finalTotal = await _repository.GetCountAsync(stoppingToken);
+                _logger.LogInformation(
+                    "Settlement summary: {Total} total settlements in queue ({Pending} pending, {Completed} completed, {Failed} failed).",
+                    finalTotal, finalPending, finalCompleted, finalFailed);
+            }
+
+            if (runAuthorities && _authorityRepository != null)
+            {
+                var finalAuthPending = await _authorityRepository.GetCountByStatusAsync("pending", stoppingToken);
+                var finalAuthCompleted = await _authorityRepository.GetCountByStatusAsync("completed", stoppingToken);
+                var finalAuthFailed = await _authorityRepository.GetCountByStatusAsync("failed", stoppingToken);
+                var finalAuthTotal = await _authorityRepository.GetCountAsync(stoppingToken);
+                _logger.LogInformation(
+                    "Local authority summary: {Total} total local authorities in queue ({Pending} pending, {Completed} completed, {Failed} failed).",
+                    finalAuthTotal, finalAuthPending, finalAuthCompleted, finalAuthFailed);
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {

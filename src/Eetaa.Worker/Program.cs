@@ -27,10 +27,12 @@ try
 
     // Register CLI options
     builder.Services.AddSingleton(cliOptions);
+    builder.Services.Configure<EetaaOptions>(builder.Configuration.GetSection(EetaaOptions.SectionName));
 
     // Register Data access
     builder.Services.AddSingleton<ISqliteConnectionFactory>(_ => new SqliteConnectionFactory(cliOptions.DatabasePath));
     builder.Services.AddSingleton<ISqliteQueueRepository, SqliteQueueRepository>();
+    builder.Services.AddSingleton<ISqliteLocalAuthorityQueueRepository, SqliteLocalAuthorityQueueRepository>();
     builder.Services.AddSingleton<ISettlementDetailsRepository, SqliteSettlementDetailsRepository>();
 
     // Register CSV & Storage channel services
@@ -44,10 +46,22 @@ try
     {
         client.Timeout = TimeSpan.FromSeconds(30);
     });
+    builder.Services.AddHttpClient<ILocalAuthorityDiscoveryCrawler, LocalAuthorityDiscoveryCrawler>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
     builder.Services.AddSingleton<IndexParser>();
     builder.Services.AddSingleton(new CrawlerOptions
     {
         BaseUrl = cliOptions.BaseUrl,
+        Concurrency = cliOptions.Concurrency,
+        DelayMs = cliOptions.DelayMs,
+        StartPage = cliOptions.StartPage,
+        MaxPages = cliOptions.MaxPages
+    });
+    builder.Services.AddSingleton(new LocalAuthorityCrawlerOptions
+    {
+        BaseUrl = cliOptions.AuthoritiesBaseUrl,
         Concurrency = cliOptions.Concurrency,
         DelayMs = cliOptions.DelayMs,
         StartPage = cliOptions.StartPage,

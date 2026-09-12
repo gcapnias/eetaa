@@ -63,4 +63,52 @@ public class IndexParserTests
         var totalPages = parser.ParseTotalPages(html);
         Assert.Equal(2247, totalPages);
     }
+
+    [Fact]
+    public void ParseLocalAuthorities_ExtractsExpectedAuthorities_FromDkPageFixture()
+    {
+        var html = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "dk_index_page_1.html"));
+        var parser = new IndexParser();
+
+        var authorities = parser.ParseLocalAuthorities(html);
+
+        Assert.Equal(5, authorities.Count);
+        Assert.Equal(1010, authorities[0].AuthorityId);
+        Assert.Equal("Δ. Αθηναίων (Αττικής)", authorities[0].NameHint);
+        Assert.Equal(1020, authorities[1].AuthorityId);
+        Assert.Equal("Δ. Πειραιώς (Αττικής)", authorities[1].NameHint);
+        Assert.Equal(1030, authorities[2].AuthorityId);
+        Assert.Equal("Κ. Αχαρνών (Αττικής)", authorities[2].NameHint);
+        Assert.Equal(1010, authorities[3].AuthorityId);
+        Assert.Equal("Δ. Αθηναίων (Νομός Αττικής & Βοιωτίας)", authorities[3].NameHint);
+        Assert.Equal(1040, authorities[4].AuthorityId);
+        Assert.Equal("Δ. Θεσσαλονίκης (Θεσσαλονίκης)", authorities[4].NameHint);
+    }
+
+    [Fact]
+    public void Deduplicate_LocalAuthorities_PreservesFirstOccurrence()
+    {
+        var html = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "dk_index_page_1.html"));
+        var parser = new IndexParser();
+
+        var authorities = parser.ParseLocalAuthorities(html);
+        var deduplicated = parser.Deduplicate(authorities).ToList();
+
+        Assert.Equal(4, deduplicated.Count);
+        Assert.Equal(1010, deduplicated[0].AuthorityId);
+        Assert.Equal("Δ. Αθηναίων (Αττικής)", deduplicated[0].NameHint);
+        Assert.Equal(1020, deduplicated[1].AuthorityId);
+        Assert.Equal(1030, deduplicated[2].AuthorityId);
+        Assert.Equal(1040, deduplicated[3].AuthorityId);
+    }
+
+    [Fact]
+    public void ParseTotalPages_ExtractsMaxPage_FromDkPaginationBar()
+    {
+        var html = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "dk_index_page_1.html"));
+        var parser = new IndexParser();
+
+        var totalPages = parser.ParseTotalPages(html);
+        Assert.Equal(937, totalPages);
+    }
 }

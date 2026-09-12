@@ -15,6 +15,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 using Xunit;
 
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
 namespace Eetaa.Worker.Tests.Integration;
 
 public class StorageConsumerLifecycleIntegrationTests : IDisposable

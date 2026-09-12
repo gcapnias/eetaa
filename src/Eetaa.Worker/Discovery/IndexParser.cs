@@ -17,7 +17,7 @@ public sealed partial class IndexParser
     [GeneratedRegex(@"<[^>]+>")]
     private static partial Regex HtmlTagRegex();
 
-    [GeneratedRegex(@"oik_metaboles\.php\?[^""'>\s]*\bpg=(\d+)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:oik|dk)_metaboles\.php\?[^""'>\s]*\bpg=(\d+)", RegexOptions.IgnoreCase)]
     private static partial Regex PaginationPageRegex();
 
     [GeneratedRegex(@"<table\b[^>]*\bid\s*=\s*[""']?results[""']?[^>]*>(.*?)</table>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
@@ -77,16 +77,77 @@ public sealed partial class IndexParser
     }
 
     /// <summary>
+    /// Parses local authorities (ID and name hint) from an EETAA index page HTML string.
+    /// Safely handles irregular markup, unclosed tags, and skips non-authority links.
+    /// Targets links containing 'dkmet' (e.g. dkmet_details.php?id=..., dkmet.php?id=..., dkmet2csv.php?sid=...).
+    /// </summary>
+    public IReadOnlyList<DiscoveredLocalAuthority> ParseLocalAuthorities(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return [];
+        }
+
+        // Scope parsing to the results table if present; fallback to full HTML if table tag is missing/irregular
+        var tableMatch = ResultsTableRegex().Match(html);
+        var searchScope = tableMatch.Success ? tableMatch.Groups[1].Value : html;
+
+        var matches = AnchorRegex().Matches(searchScope);
+        var results = new List<DiscoveredLocalAuthority>(matches.Count);
+
+        foreach (Match match in matches)
+        {
+            var href = match.Groups[1].Value;
+            var innerHtml = match.Groups[2].Value;
+
+            // Only consider links with local authority endpoints: dkmet_details, dkmet, or dkmet2csv
+            if (!href.Contains("dkmet", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Check if href contains authority id (id=\d+ or sid=\d+)
+            var idMatch = SettlementIdParamRegex().Match(href);
+            if (!idMatch.Success)
+            {
+                continue;
+            }
+
+            if (!int.TryParse(idMatch.Groups[1].Value, out var authorityId))
+            {
+                continue;
+            }
+
+            // Strip nested HTML tags and decode HTML entities
+            var cleanText = HtmlTagRegex().Replace(innerHtml, string.Empty);
+            cleanText = WebUtility.HtmlDecode(cleanText).Trim();
+
+            results.Add(new DiscoveredLocalAuthority(authorityId, cleanText));
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Deduplicates settlements by SettlementId, preserving the first occurrence.
     /// </summary>
-    public IEnumerable<DiscoveredSettlement> Deduplicate(IEnumerable<DiscoveredSettlement> settlements)
+    public IEnumerable<DiscoveredSettlement> Deduplicate(IEnumerable<DiscoveredSettlement> settlements) =>
+        DeduplicateBy(settlements, s => s.SettlementId);
+
+    /// <summary>
+    /// Deduplicates local authorities by AuthorityId, preserving the first occurrence.
+    /// </summary>
+    public IEnumerable<DiscoveredLocalAuthority> Deduplicate(IEnumerable<DiscoveredLocalAuthority> authorities) =>
+        DeduplicateBy(authorities, a => a.AuthorityId);
+
+    private static IEnumerable<T> DeduplicateBy<T>(IEnumerable<T> items, Func<T, int> keySelector)
     {
         var seenIds = new HashSet<int>();
-        foreach (var settlement in settlements)
+        foreach (var item in items)
         {
-            if (seenIds.Add(settlement.SettlementId))
+            if (seenIds.Add(keySelector(item)))
             {
-                yield return settlement;
+                yield return item;
             }
         }
     }

@@ -3,8 +3,11 @@ namespace Eetaa.Worker.Configuration;
 public sealed class WorkerCliOptions
 {
     public string Mode { get; set; } = "all"; // all, discover, download
+    public string Entity { get; set; } = "all"; // all, settlements, authorities
     public string DatabasePath { get; set; } = "data/eetaa.db";
     public string BaseUrl { get; set; } = "https://eetaa.gr/eetaa/metaboles/oik_metaboles.php";
+    public string SettlementsBaseUrl { get; set; } = "https://eetaa.gr/eetaa/metaboles/oik_metaboles.php";
+    public string AuthoritiesBaseUrl { get; set; } = "https://eetaa.gr/eetaa/metaboles/dk_metaboles.php";
     public int Concurrency { get; set; } = 3;
     public int DelayMs { get; set; } = 150;
     public int StartPage { get; set; } = 1;
@@ -28,6 +31,30 @@ public sealed class WorkerCliOptions
             {
                 options.Mode = args[++i].Trim().ToLowerInvariant();
             }
+            else if (arg.StartsWith("--entity=", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Entity = arg["--entity=".Length..].Trim().ToLowerInvariant();
+            }
+            else if (string.Equals(arg, "--entity", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                options.Entity = args[++i].Trim().ToLowerInvariant();
+            }
+            else if (arg.StartsWith("--settlements-base-url=", StringComparison.OrdinalIgnoreCase))
+            {
+                options.SettlementsBaseUrl = arg["--settlements-base-url=".Length..].Trim();
+            }
+            else if (string.Equals(arg, "--settlements-base-url", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                options.SettlementsBaseUrl = args[++i].Trim();
+            }
+            else if (arg.StartsWith("--authorities-base-url=", StringComparison.OrdinalIgnoreCase))
+            {
+                options.AuthoritiesBaseUrl = arg["--authorities-base-url=".Length..].Trim();
+            }
+            else if (string.Equals(arg, "--authorities-base-url", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                options.AuthoritiesBaseUrl = args[++i].Trim();
+            }
             else if (arg.StartsWith("--db=", StringComparison.OrdinalIgnoreCase))
             {
                 options.DatabasePath = arg["--db=".Length..].Trim();
@@ -38,11 +65,21 @@ public sealed class WorkerCliOptions
             }
             else if (arg.StartsWith("--base-url=", StringComparison.OrdinalIgnoreCase))
             {
-                options.BaseUrl = arg["--base-url=".Length..].Trim();
+                var url = arg["--base-url=".Length..].Trim();
+                options.BaseUrl = url;
+                if (options.SettlementsBaseUrl == "https://eetaa.gr/eetaa/metaboles/oik_metaboles.php")
+                {
+                    options.SettlementsBaseUrl = url;
+                }
             }
             else if (string.Equals(arg, "--base-url", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
             {
-                options.BaseUrl = args[++i].Trim();
+                var url = args[++i].Trim();
+                options.BaseUrl = url;
+                if (options.SettlementsBaseUrl == "https://eetaa.gr/eetaa/metaboles/oik_metaboles.php")
+                {
+                    options.SettlementsBaseUrl = url;
+                }
             }
             else if (arg.StartsWith("--concurrency=", StringComparison.OrdinalIgnoreCase))
             {
@@ -84,6 +121,11 @@ public sealed class WorkerCliOptions
             {
                 options.Force = true;
             }
+        }
+
+        if (options.Entity is not ("all" or "settlements" or "authorities"))
+        {
+            throw new ArgumentException($"Invalid entity '{options.Entity}'. Allowed values: all, settlements, authorities.");
         }
 
         return options;

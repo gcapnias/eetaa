@@ -16,7 +16,7 @@ The EETAA publishes historical statutory records documenting every administrativ
 
 ## Domain Concepts & Vocabulary
 
-This project adheres to the official domain terminology defined in [CONTEXT.md](CONTEXT.md):
+This project adheres to the official domain terminology defined in [GLOSSARY.md](GLOSSARY.md):
 
 - **Settlement**: An officially recognized Greek populated locality or community identified by a unique EETAA numerical identifier (`id` or `sid`). *(Avoid: Village, town, city, locality, place)*
 - **Administrative Change**: An official statutory modification of a settlement's legal status, name, or local government attachment (such as annexation, renaming, merger, or transfer to another municipality/prefecture), enacted via a Government Gazette issue. *(Avoid: Mutation, transition, modification, update)*

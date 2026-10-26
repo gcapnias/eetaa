@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Subagent Supervision and Reporting
+
+Remain responsible for every agent you spawn. Monitor delegated work using the available coordination tools, and proactively relay results, blockers, and questions requiring user input to the main conversation. Do not wait for the user to request updates or end your turn merely because work has been delegated. Honor any requested confirmation checkpoint before proceeding with dependent work.
+
 ## Agent skills
 
 ### Issue tracker
@@ -12,7 +16,7 @@ Canonical triage roles mapped 1:1 to default labels (`needs-triage`, `needs-info
 
 ### Domain docs
 
-Single-context layout (`CONTEXT.md` and `docs/adr/` at the repo root). See `docs/agents/domain.md`.
+Single-context layout (`GLOSSARY.md` and `docs/adr/` at the repo root). See `docs/agents/domain.md`.
 
 ### Git Commits
 
@@ -24,13 +28,21 @@ Use `/firecrawl-developer-index` skill to search when the question is how a libr
 
 ## Workspace folders
 
+### `.worktrees/`
+
+Create all linked Git worktrees under the primary repository's `.worktrees/<task-name>/` directory. This applies to spikes, research, implementation, and delegated agents, keeping their files within the writable workspace.
+
+Resolve the destination from the primary checkout, even when working inside a linked worktree. Before creating a worktree, verify that its resolved absolute path is inside the primary repository's `.worktrees/` directory. Pass that path explicitly to `git worktree add`.
+
+Contents are gitignored. Manage linked checkouts with Git worktree commands; preserve their work until cleanup is authorized.
+
 ### `.scratch/`
 
-Temporary space for ad-hoc operations (downloads, intermediate payloads, one-off notes). Gitignored except for `.gitkeep` — nothing placed here is tracked or expected to survive across sessions. Safe to write to freely; safe to delete contents at any time.
+Temporary space for ad-hoc operations (downloads, intermediate payloads, one-off notes). Gitignored — nothing placed here is tracked or expected to survive across sessions. Safe to write to freely; safe to delete contents at any time.
 
 ### `.firecrawl/`
 
-Output space for the firecrawl agent (fetched pages, extracted content). Gitignored except for `.gitkeep` — nothing placed here is tracked or expected to survive across sessions.
+Output space for the firecrawl agent (fetched pages, extracted content). Gitignored — nothing placed here is tracked or expected to survive across sessions.
 
 ### `archive/`
 

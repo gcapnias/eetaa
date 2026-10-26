@@ -481,9 +481,30 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
-.vscode/**
-!.vscode/settings.json
+# Agents folder
+.agents/agents/**
+.agents/skills/**
+.agents/worktrees/**
 
-.agents/**
+# Claude Code
+.claude/agents/**
+.claude/skills/**
+.claude/worktrees/**
+.claude/settings.local.json
+
+# Codex
+.codex/agents/**
+.codex/config.toml
+
+# Firecrawl, Playwright CLI, Scratch and Worktrees directories
+.firecrawl/**
+.playwright-cli/**
 .scratch/**
 .worktrees/**
+
+# Keep .gitkeep files in the repository
+!**/.gitkeep
+
+# Local runtime data and generated diagnostics
+/src/Eetaa.Worker/Data/eetaa.db
+/.doctor/

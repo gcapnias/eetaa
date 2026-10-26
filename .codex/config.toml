@@ -1,5 +1,19 @@
+# Codex workspace permissions
+
+# Allow Codex to execute actions silently within the designated boundaries
+#approval_policy = "never"
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+
+# Restricts Codex's write access to the active workspace
+# sandbox_mode = "workspace-write"
+# sandbox_mode = "danger-full-access"
+
+[sandbox_workspace_write]
+network_access = true  # Set to true if tools require internet access
+
 [agents]
-max_concurrent_threads_per_session = 8
+max_concurrent_threads_per_session = 16
 
 [features]
 memories = true

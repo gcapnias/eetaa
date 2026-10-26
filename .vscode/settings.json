@@ -54,9 +54,7 @@
     "fetch": true
   },
   "chat.tools.terminal.autoApprove": {
-    /* dotnet */
     "/^dotnet\\s+format$/": true,
-    /* utilities */
     "/^docker\\s+(container|image|network|volume|context|system)\\s+(ls|ps|inspect|history|show|df|info)\\b/": true,
     "/^docker\\s+(ps|images|info|version|inspect|logs|top|stats|port|diff|search|events)\\b/": true,
     "/^docker\\s+compose\\s+(ps|ls|top|logs|images|config|version|port|events)\\b/": true,
@@ -70,7 +68,6 @@
     "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+rev-parse\\b.*/": true,
     "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+show\\b/": true,
     "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+status\\b.*/": true,
-    /* packagers */
     "npm ci": true,
     "/^npm\\s+(ls|list|outdated|view|info|show|explain|why|root|prefix|bin|search|doctor|fund|repo|bugs|docs|home|help(-search)?)\\b/": true,
     "/^npm\\s+audit$/": true,
@@ -88,7 +85,6 @@
     "/^yarn\\s+config\\s+(list|get)\\b/": true,
     "/^yarn\\s+install\\s+--frozen-lockfile\\b/": true,
     "/^yarn\\s+licenses\\b/": true,
-    /* bash */
     "/^column\\b.*-c\\s+[0-9]{4,}/": false,
     "/^date\\b.*(-s|--set)\\b/": false,
     "/^find\\b.*-(delete|exec|execdir|fprint|fprintf|fls|ok|okdir)\\b/": false,
@@ -153,7 +149,6 @@
     "wget": false,
     "which": true,
     "xargs": false,
-    /* PowerShell */
     "/^Compare-[a-z0-9]/i": true,
     "/^Format-[a-z0-9]/i": true,
     "/^Measure-[a-z0-9]/i": true,

@@ -1,210 +1,141 @@
-# EETAA Settlement Administrative History Worker
+# EETAA Administrative History Worker
 
-A high-performance, resilient .NET 10 console worker application for crawling, discovering, and ingesting Greek settlement administrative changes published by EETAA (Hellenic Agency for Local Development and Local Government / Ελληνική Εταιρία Τοπικής Ανάπτυξης και Αυτοδιοίκησης) into a local SQLite database.
+A .NET 10 console worker that discovers and ingests Greek settlement and local authority administrative changes published by EETAA into a local SQLite database.
 
----
+## Domain and architecture
 
-## Overview
+The worker handles **Settlements** and **Local Authorities** (Municipalities / Δήμοι and Communities / Κοινότητες). Each has its own queue and administrative change records. See [GLOSSARY.md](GLOSSARY.md) for terminology and [the ADRs](docs/adr/) for architecture decisions.
 
-The EETAA publishes historical statutory records documenting every administrative change of Greek settlements from the 19th century to modern times. This application automates:
+| Entity | Discovery endpoint | CSV endpoint | Queue | Administrative changes |
+| --- | --- | --- | --- | --- |
+| Settlement | `oik_metaboles.php` | `oikmet2csv.php?sid={id}` | `settlement_queue` | `oikmet_details` |
+| Local Authority | `dk_metaboles.php` | `dkmet2csv.php?sid={id}` | `local_authority_queue` | `dkmet_details` |
 
-1. Crawling the paginated settlement index to discover settlement IDs and names.
-2. Ingesting per-settlement CSV exports containing statutory administrative change history.
-3. Normalizing and storing all records in a local SQLite database with transactional integrity and crash resumability.
+Default endpoints are under `https://eetaa.gr/eetaa/metaboles/`. Discovery detects pagination from HTML and inserts previously unseen identifiers into the relevant queue. Local authority discovery preserves the first name hint in page order when an identifier appears more than once.
 
----
-
-## Domain Concepts & Vocabulary
-
-This project adheres to the official domain terminology defined in [GLOSSARY.md](GLOSSARY.md):
-
-- **Settlement**: An officially recognized Greek populated locality or community identified by a unique EETAA numerical identifier (`id` or `sid`). *(Avoid: Village, town, city, locality, place)*
-- **Administrative Change**: An official statutory modification of a settlement's legal status, name, or local government attachment (such as annexation, renaming, merger, or transfer to another municipality/prefecture), enacted via a Government Gazette issue. *(Avoid: Mutation, transition, modification, update)*
-- **Government Gazette (FEK)**: The official statutory journal of the Hellenic Republic (Φύλλο Εφημερίδας της Κυβερνήσεως) that legalizes an administrative change, specified by year, issue number, and publication date. *(Avoid: Decree, legislation, bulletin, gazette issue)*
-- **Prefecture (Nomos)**: The regional administrative unit of Greece to which a settlement was historically assigned at the time of a specific administrative change. *(Avoid: County, province, region, department)*
-- **Settlement Queue**: The persistent local inventory (`settlement_queue` table) that tracks each known settlement identifier, its crawl lifecycle state (`pending`, `processing`, `completed`, `failed`), attempt count, and last fetch timestamp. *(Avoid: Task list, fetch job, work items, download queue)*
-
----
-
-## Architecture & Pipeline Phases
-
-The worker implements a staged, decoupled architecture designed for high network concurrency and SQLite write safety:
+With defaults (`--entity=all --mode=all`), stages run sequentially:
 
 ```text
-[ EETAA Web Endpoint ]
-         │
-         ▼  (HTTP GET with polite rate limiting & bounded concurrency)
-┌────────────────────────┐
-│ IndexDiscoveryCrawler  │──(Inserts discovered settlements)──┐
-└────────────────────────┘                                     │
-                                                               ▼
-┌──────────────────────────────┐                       ┌──────────────────┐
-│  SettlementIngestionService  │◄──(Fetch pending)─────│ settlement_queue │
-└──────────────────────────────┘                       └──────────────────┘
-         │                                                     ▲
-         ▼  (Stream CSV & parse changes)                       │
-┌──────────────────────────────┐                               │
-│  SingleWriterChannel         │                               │
-│  (System.Threading.Channels) │                               │
-└──────────────────────────────┘                               │
-         │                                                     │
-         ▼  (Single consumer loop)                             │
-┌──────────────────────────────┐                               │
-│  SingleWriterStorageEngine   │──(Isolated transactions)──────┘
-└──────────────────────────────┘       │
-                                       ▼
-                             ┌──────────────────┐
-                             │ oikmet_details   │
-                             │ (SQLite WAL DB)  │
-                             └──────────────────┘
+Settlement Discovery -> Settlement Ingestion
+    -> Local Authority Discovery -> Local Authority Ingestion
 ```
 
-1. **Index Discovery Phase (`--mode=discover` or `--mode=all`)**:
-   - Crawls paginated index pages (`oik_metaboles.php?ltr=ALL&pg=...`) concurrently with polite inter-request delay.
-   - Extracts settlement IDs and Greek settlement names, storing them in the `settlement_queue` table with `status = 'pending'`.
-   - Supports page range controls (`--start-page`, `--max-pages`).
+`--entity` selects entities; `--mode` selects discovery, download, or both for those entities. Startup creates both sets of tables and resets orphaned `processing` records in both queues, even when only one entity is selected.
 
-2. **Concurrent Ingestion & Rate Throttling (`--mode=download` or `--mode=all`)**:
-   - Pulls pending settlements from `settlement_queue` and streams CSV exports (`oikmet2csv.php?sid={id}`).
-   - Controls concurrency with a bounded semaphore (`--concurrency`) and enforces polite inter-request delays (`--delay-ms`).
-   - Protects against transient HTTP 5xx and 429 errors using exponential backoff retry with jitter.
-   - Parses Greek UTF-8 semicolon-delimited CSV payloads, normalizing `DD/MM/YYYY` FEK dates to ISO-8601 (`YYYY-MM-DD`) and sanitizing unassigned columns.
+During ingestion, concurrent HTTP downloads parse CSV payloads and feed a bounded channel (capacity 1,000). One storage consumer saves each payload in a transaction that replaces the entity's changes and marks its queue item `completed`. Each ingestion stage has its own channel, consumer, and progress coordinator. Discovery and queue status updates also write to SQLite outside this consumer.
 
-3. **Single-Writer SQLite Storage Engine**:
-   - Eliminates `SQLITE_BUSY` database lock contention by routing all write operations through a dedicated background `System.Threading.Channels.Channel<SettlementPayload>`.
-   - Executes each settlement's ingestion inside an isolated, durable transaction: purges prior change records for that settlement, inserts normalized rows into `oikmet_details`, and updates `settlement_queue` status to `completed`.
-   - Tunes SQLite for concurrent reading and high write throughput using `PRAGMA journal_mode=WAL;` and `PRAGMA synchronous=NORMAL;`.
-   - Automatically recovers interrupted in-flight settlements on startup by resetting orphaned `processing` records back to `pending` in the Settlement Queue.
+CSV parsing handles Greek UTF-8 with or without a BOM, semicolon delimiters, and quoted fields. Settlement exports have seven columns; local authority exports have eight, including Authority Type. Parsers match Greek headers with positional fallbacks. Valid FEK dates become ISO `YYYY-MM-DD`; unparseable dates have `fek_date = NULL` and retain trimmed source text in `fek_date_raw`. Header-only files complete with zero change records.
 
----
+## Prerequisites, build, and tests
 
-## Prerequisites
+- .NET 10 SDK.
+- SQLite is supplied by `Microsoft.Data.Sqlite`; no separate database server is required.
 
-- **.NET 10 SDK** (v10.0 or later)
-- **SQLite** (bundled runtime via `Microsoft.Data.Sqlite`)
+Run from the repository root:
 
----
-
-## Building and Testing
-
-### Build the Solution
-
-```bash
-dotnet build
+```sh
+dotnet restore
+dotnet build --no-restore
+dotnet test --no-restore
 ```
 
-### Run All Unit and Integration Tests
+Tests use recorded fixtures, simulated HTTP responses, and temporary SQLite databases. They cover parsing, repositories, retries, progress output, multi-entity orchestration, crash recovery, storage consumer failure, and graceful drain.
 
-```bash
-dotnet test
-```
+## CLI options
 
-The test suite covers CLI option parsing, HTML index parsing, CSV parsing, date normalization, retry policies, repository transactions, and end-to-end worker lifecycle flows.
+Value options accept `--option value` and `--option=value`. Boolean options are presence-only switches.
 
----
-
-## CLI Options Reference
-
-The worker CLI options are parsed by `WorkerCliOptions`. Arguments can be supplied in either `--option <value>` or `--option=<value>` syntax.
-
-| Option | Type | Default | Description |
+| Option | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `--mode` | string | `all` | Execution mode: `all` (discover and download), `discover` (index crawl only), or `download` (CSV ingestion only). |
-| `--db` | string | `data/eetaa.db` | Relative or absolute file path to the target SQLite database. |
-| `--base-url` | string | `https://eetaa.gr/eetaa/metaboles/oik_metaboles.php` | Base URL of the EETAA settlement index endpoint. |
-| `--concurrency` | integer | `3` | Maximum number of concurrent HTTP requests for crawling and downloading. |
-| `--delay-ms` | integer | `150` | Polite inter-request delay in milliseconds between HTTP requests. |
-| `--start-page` | integer | `1` | Starting page number for the index discovery phase. |
-| `--max-pages` | integer | *(none / uncapped)* | Maximum number of index pages to crawl during discovery. When omitted, crawls all available pages. |
-| `--retry-failed` | flag (switch) | `false` | When present, resets `failed` Settlement Queue items back to `pending` before running ingestion. |
-| `--force` | flag (switch) | `false` | When present, forces re-download and re-ingestion of already `completed` settlements. |
+| `--entity` | string | `all` | `all`, `settlements`, or `authorities`. |
+| `--mode` | string | `all` | `all` runs discovery then ingestion per selected entity; `discover` only discovers; `download` only ingests existing queue items. |
+| `--db` | string | `data/eetaa.db` | SQLite path relative to the process working directory, or absolute. Parent directories are created as needed. |
+| `--base-url` | string | `https://eetaa.gr/eetaa/metaboles/oik_metaboles.php` | Legacy settlement discovery URL; does not change authority discovery or CSV endpoints. |
+| `--settlements-base-url` | string | `https://eetaa.gr/eetaa/metaboles/oik_metaboles.php` | Settlement discovery URL. |
+| `--authorities-base-url` | string | `https://eetaa.gr/eetaa/metaboles/dk_metaboles.php` | Local authority discovery URL. |
+| `--concurrency` | integer | `3` | Maximum concurrent requests within a stage; processing uses at least one worker. |
+| `--delay-ms` | integer | `150` | Delay per worker between requests; nonpositive values disable it. |
+| `--start-page` | integer | `1` | First discovery page, clamped to at least 1; applies to each selected entity. |
+| `--max-pages` | integer | unset | Discovery page-count cap from the start page, bounded by detected pagination. Use a positive value. |
+| `--retry-failed` | switch | absent | Select `pending` and `failed` queue items for ingestion. |
+| `--force` | switch | absent | Select every existing queue item, including completed and failed items. Takes precedence over `--retry-failed`. |
 
----
+Use `--settlements-base-url` for new commands. When both settlement URL options are supplied, an explicit nondefault settlement URL takes precedence over the legacy URL. Internally, `--base-url` only assigns the effective settlement URL while it still equals the built-in default; a later `--settlements-base-url` always assigns it.
 
-## Usage Examples
+Runtime options come from `WorkerCliOptions.Parse` and its defaults. The `Eetaa` endpoint section in `appsettings.json` is bound to `EetaaOptions`, but running crawlers and ingestion services do not consume those bound values. Discovery URLs use CLI options; CSV URLs are currently fixed in `Program.cs`. Editing that JSON section does not redirect HTTP requests.
 
-All examples assume execution from the repository root via `dotnet run --project src/Eetaa.Worker/`.
+## Usage examples
 
-### 1. Full Pipeline (Default)
+Run from the repository root. Select `--entity=settlements` to retain a settlement-only workflow.
 
-Run both discovery and ingestion using default settings (`data/eetaa.db`, concurrency 3, delay 150ms):
+Full four-stage pipeline for both entities:
 
-```bash
-dotnet run --project src/Eetaa.Worker/
-# Or explicitly:
-dotnet run --project src/Eetaa.Worker/ -- --mode all
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --entity=all --mode=all
 ```
 
-### 2. Discovery Only
+Discover up to ten settlement index pages without downloading CSVs:
 
-Crawl the settlement index starting from page 1 up to page 10 and record discovered settlements in the queue:
-
-```bash
-dotnet run --project src/Eetaa.Worker/ -- --mode discover --start-page 1 --max-pages 10
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --entity=settlements --mode=discover --start-page=1 --max-pages=10
 ```
 
-### 3. Ingestion (Download) Only
+Discover and ingest only local authorities:
 
-Process existing pending settlements from the queue without re-crawling index pages:
-
-```bash
-dotnet run --project src/Eetaa.Worker/ -- --mode download
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --entity=authorities --mode=all
 ```
 
-### 4. Custom Database File Path
+Resume pending downloads for both entities without repeating discovery:
 
-Specify a custom database destination (the directory and database schema are created automatically):
-
-```bash
-dotnet run --project src/Eetaa.Worker/ -- --db "data/custom_eetaa.db"
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --entity=all --mode=download
 ```
 
-### 5. Conservative / Polite Rate Throttling
+Include failed local authorities in the next ingestion run:
 
-Throttle requests gently when running against sensitive networks or rate limits (single connection, 500ms inter-request delay):
-
-```bash
-dotnet run --project src/Eetaa.Worker/ -- --concurrency 1 --delay-ms 500
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --entity=authorities --mode=download --retry-failed
 ```
 
-### 6. Retry Failed Ingestions
+Re-ingest every settlement already in the queue, including completed items:
 
-Re-queue previously failed settlements (e.g. after network drops or server timeouts) and resume ingestion:
-
-```bash
-dotnet run --project src/Eetaa.Worker/ -- --mode download --retry-failed
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --entity=settlements --mode=download --force
 ```
 
-### 7. Force Full Re-Ingestion
+Use a custom database and lower concurrency for both entities:
 
-Force re-download and re-parsing of all settlements, including already completed entries:
-
-```bash
-dotnet run --project src/Eetaa.Worker/ -- --mode download --force
+```sh
+dotnet run --project src/Eetaa.Worker/ -- --db=data/custom_eetaa.db --concurrency=1 --delay-ms=500
 ```
 
----
+## Progress, recovery, and shutdown
 
-## Database Schema Summary
+Queue states are `pending`, `processing`, `completed`, and `failed`. Normal ingestion selects pending items; retry and force switches widen that selection. Download/parse failures are sent to the storage consumer as failure payloads, which mark the queue item failed and save its error message. A downloaded item is only complete after its SQLite transaction commits.
 
-The SQLite database initialized at the configured `--db` path contains two primary tables:
+Transient HTTP failures (429, 500, 502, 503, 504, connection errors, and timeouts) use exponential backoff with jitter, with up to three retries after the initial attempt. Worker cancellation stops retries.
 
-- **`settlement_queue`**: Tracks crawl lifecycle state per settlement.
-  - `settlement_id` (INTEGER PRIMARY KEY)
-  - `settlement_name` (TEXT)
-  - `status` (TEXT: `pending`, `processing`, `completed`, `failed`)
-  - `attempts` (INTEGER)
-  - `last_attempt_at` (TEXT ISO-8601)
-  - `created_at` (TEXT ISO-8601)
-  - `updated_at` (TEXT ISO-8601)
+Information-level progress logs report persisted items, total items, percentage, throughput, ETA, failure count, and channel buffer depth. Reports occur every 100 persisted/failed items or every 15 seconds while work remains. A final summary is emitted when needed, including after a partial run.
 
-- **`oikmet_details`**: Stores normalized administrative changes per settlement.
-  - `settlement_id` (INTEGER)
-  - `change_order` (INTEGER)
-  - `fek_issue` (TEXT)
-  - `fek_date` (TEXT ISO-8601 `YYYY-MM-DD` or fallback raw string)
-  - `fek_date_raw` (TEXT)
-  - `change_description` (TEXT)
-  - `nomos` (TEXT)
-  - `created_at` (TEXT ISO-8601)
-  - Composite primary key: `(settlement_id, change_order)`
+The storage consumer has no 30-second deadline during active ingestion. When ingestion ends or shutdown is requested, the worker completes the channel and allows up to 30 seconds for drain. If the consumer exits prematurely, the worker cancels the producer and completes the channel to unblock pending writes. Uncommitted items left `processing` can be recovered on the next startup. The host's own shutdown lifetime also applies.
+
+## Database schema
+
+Tables are created with `CREATE TABLE IF NOT EXISTS`; this is initialization, not a versioned migration system. Initialization requests WAL journal mode and NORMAL synchronous mode; connections enable foreign keys. All four tables are initialized regardless of entity selection.
+
+| Queue table | Identifier primary key | Other columns |
+| --- | --- | --- |
+| `settlement_queue` | `settlement_id` | `name_hint`, `status`, `attempt_count`, `last_attempt_at`, `completed_at`, `error_message`, `created_at`, `updated_at` |
+| `local_authority_queue` | `authority_id` | `name_hint`, `status`, `attempt_count`, `last_attempt_at`, `completed_at`, `error_message`, `created_at`, `updated_at` |
+
+Both queues index `status`. A name hint may differ from names in historical change records. `attempt_count` counts recorded ingestion outcomes, not individual HTTP retry attempts.
+
+| Change table | Composite primary key | Entity-specific columns |
+| --- | --- | --- |
+| `oikmet_details` | (`settlement_id`, `change_order`) | `settlement_name` |
+| `dkmet_details` | (`authority_id`, `change_order`) | `ota_type`, `authority_name` |
+
+Both change tables also contain `nomos`, `change_year`, `fek_number`, `fek_issue`, `fek_date`, `fek_date_raw`, `change_description`, `raw_record`, and `created_at`. `ota_type` stores Authority Type as `Δ` or `Κ` when recognized. Each change table references its queue identifier with `ON DELETE CASCADE`, and has separate indexes on its identifier and `fek_date`.
+
+`change_order` preserves parsed CSV row order; records are not sorted by FEK date. Successful re-ingestion atomically replaces an entity's change rows, including removing old rows when the new CSV has no changes. A recorded download/parse failure preserves existing change rows.

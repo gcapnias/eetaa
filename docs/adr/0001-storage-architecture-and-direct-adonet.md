@@ -1,8 +1,8 @@
 # Storage Architecture and Direct ADO.NET Data Access
 
-Context: We need to ingest ~33,000+ administrative changes across thousands of settlements from EETAA into a local SQLite database with resumability, transactional integrity, and minimal memory overhead.
+Context: We need to ingest settlement and local authority administrative changes from EETAA into a local SQLite database with resumability, transactional integrity, and minimal memory overhead. Local authority support extends the original settlement scope as recorded in [ADR-0005](0005-local-authority-ingestion-and-multi-entity-pipeline.md).
 
-Decision: We will use SQLite via pure ADO.NET (`Microsoft.Data.Sqlite`) without any ORM or micro-ORM (no Entity Framework, no Dapper). State management will be divided cleanly into a queue table (`settlement_queue`) tracking crawl lifecycle and retry counters, and the primary data table (`oikmet_details`) storing normalized change events parsed directly from EETAA CSV responses.
+Decision: Use SQLite via direct ADO.NET (`Microsoft.Data.Sqlite`) without an ORM or micro-ORM. Each entity has a queue tracking ingestion status and recorded attempts, and a separate administrative change table: `settlement_queue` / `oikmet_details` and `local_authority_queue` / `dkmet_details`. Table creation uses `CREATE TABLE IF NOT EXISTS`; the implementation does not provide a versioned migration system. See [README.md](../../README.md#database-schema) for current columns and keys.
 
 Why:
 
